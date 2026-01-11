@@ -6,6 +6,7 @@ import { parseExcelFile } from "./services/excel-parser";
 import { generateProjection, createProjectionRecord, identifyOpportunities, ALGORITHM_VERSIONS } from "./services/jobu-algorithm";
 import { analyzeGameForRlm, analyzeHandleSplit } from "./services/rlm-detector";
 import { discoverPatterns, analyzeGamePatterns, runPatternDiscovery } from "./services/ai-pattern-discovery";
+import { runScraper, type ScraperName } from "./services/scrapers";
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -211,15 +212,31 @@ export async function registerRoutes(
         lastRefreshStatus: "pending",
       });
       
-      // TODO: Trigger actual scraping based on source name
-      // For now, just mark as success after a delay
-      setTimeout(async () => {
-        await storage.updateDataSource(name, {
-          lastRefreshStatus: "success",
-        });
-      }, 2000);
-      
+      // Send immediate response - scraping runs in background
       res.json({ message: "Refresh started" });
+      
+      // Run the scraper in background
+      const validScrapers: ScraperName[] = ["actionnetwork", "teamrankings", "kenpom"];
+      if (validScrapers.includes(name as ScraperName)) {
+        try {
+          const result = await runScraper(name as ScraperName);
+          await storage.updateDataSource(name, {
+            lastRefreshStatus: result.success ? "success" : "error",
+            lastRefreshError: result.error || null,
+          });
+          console.log(`Scraper ${name} completed:`, result.message);
+        } catch (err) {
+          await storage.updateDataSource(name, {
+            lastRefreshStatus: "error",
+            lastRefreshError: err instanceof Error ? err.message : "Unknown error",
+          });
+        }
+      } else {
+        await storage.updateDataSource(name, {
+          lastRefreshStatus: "error",
+          lastRefreshError: `Unknown data source: ${name}`,
+        });
+      }
     } catch (error) {
       console.error("Error refreshing data source:", error);
       res.status(500).json({ error: "Failed to refresh data source" });

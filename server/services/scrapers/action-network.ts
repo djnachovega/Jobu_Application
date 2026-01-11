@@ -27,7 +27,7 @@ export async function loginToActionNetwork(
 ): Promise<boolean> {
   try {
     console.log("Navigating to Action Network login...");
-    await page.goto("https://www.actionnetwork.com/login", { waitUntil: "networkidle2" });
+    await page.goto("https://www.actionnetwork.com/login", { waitUntil: "domcontentloaded", timeout: 60000 });
     
     await delay(2000);
     
@@ -65,8 +65,15 @@ export async function loginToActionNetwork(
       return false;
     }
     
-    // Wait for navigation after login
-    await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 15000 });
+    // Wait for navigation after login - use longer timeout and less strict wait
+    try {
+      await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 30000 });
+    } catch (e) {
+      // Navigation may not trigger if already on the page, continue anyway
+      console.log("Navigation wait timed out, checking login status anyway...");
+    }
+    
+    await delay(3000); // Give time for page to settle
     
     // Check if logged in by looking for user menu or profile element
     const isLoggedIn = await page.evaluate(() => {
@@ -93,8 +100,8 @@ export async function scrapeOddsPage(page: Page, sport: string): Promise<Scraped
     }
     
     console.log(`Scraping ${sport} odds from: ${url}`);
-    await page.goto(url, { waitUntil: "networkidle2" });
-    await delay(3000);
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+    await delay(5000); // Give more time for dynamic content
     
     // Extract game data from the odds table
     const gameRows = await page.$$eval('[data-testid="game-row"], .game-row, .odds-row, tr[data-game-id]', rows => {

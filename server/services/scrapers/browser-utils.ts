@@ -44,9 +44,9 @@ export async function createPage(browser: Browser): Promise<Page> {
   
   await page.setViewport({ width: 1920, height: 1080 });
   
-  // Set default timeout
-  page.setDefaultTimeout(30000);
-  page.setDefaultNavigationTimeout(30000);
+  // Set default timeout - longer for Replit environment
+  page.setDefaultTimeout(60000);
+  page.setDefaultNavigationTimeout(60000);
   
   return page;
 }

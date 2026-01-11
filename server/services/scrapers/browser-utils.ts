@@ -4,6 +4,12 @@ let browserInstance: Browser | null = null;
 
 export async function getBrowser(): Promise<Browser> {
   if (!browserInstance || !browserInstance.connected) {
+    // Find chromium executable - check common Replit/Nix paths
+    const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || 
+      "/nix/store/zi4f80l169xlmivz8vja8wlphq74qqk0-chromium-125.0.6422.141/bin/chromium";
+    
+    console.log("Launching browser with executable:", executablePath);
+    
     browserInstance = await puppeteer.launch({
       headless: true,
       args: [
@@ -12,9 +18,11 @@ export async function getBrowser(): Promise<Browser> {
         "--disable-dev-shm-usage",
         "--disable-accelerated-2d-canvas",
         "--disable-gpu",
+        "--single-process",
+        "--no-zygote",
         "--window-size=1920x1080",
       ],
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+      executablePath,
     });
   }
   return browserInstance;

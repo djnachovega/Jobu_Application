@@ -1,0 +1,95 @@
+Jobu NBA Algorithm – v3.5R1 (Daily Run)  
+
+Task: Run the Jobu NBA Basketball Algorithm on the attached slate of games.  Team listed first = Away, second = Home. Evaluate Spread, Moneyline, and Totals. Return only price-disciplined edges with strong modeled probability advantage.
+
+🔹 Core Configuration
+Primary Data Sources (authority order):
+1. Attached NBA Sheets – canonical ( Season Stats and Home/Away splits where it makes sense).
+2. Pull Externals via Web Search for Situational/context overlays (travel distance, rest/B2B, altitude, whistle bias), Opponent-adjusted SoS correction, Live market/juice sweep.
+3. Markets: TeamRankings, Covers, or VegasInsider (current odds).
+4. Injuries/Rotations: Rotowire, Covers, or reliable depth charts.
+5. Venue Context: pace, travel distance, altitude.
+Treat attached data as truth. If a field missing → shrink to season baseline (no fabrication). Use short-name team mapping for joins.
+
+🔹 Modeling Framework (Jobu Suite NBA Core)
+Component	Weight	Description
+Efficiency	55–60%	Off/Def Efficiency (PPP / ORtg / DRtg), eFG%, TOV%, ORB%, FTr (venue-conditioned).
+Pace / Possessions	15–20%	Possessions per game & opponent possessions per game (venue-conditioned).
+Usage / Availability	10–15%	Player minutes, injuries, rotation depth, and key on/off impact.
+Situational / Contextual	~10%	Travel, rest days, altitude, foul rate, free-throw variance.
+Blend Conditioning (Efficiency & Pace Layers):
+* 55% Home/Away Split
+* 35% Season Baseline
+* 10% Last-3 Usage Overlay (rotation / minutes recency only) If sample < 3 games → shrink toward season baseline.
+Strength of Schedule: Apply opponent-adjusted efficiency correction (TeamRankings SoS or opponent-adj ORtg/DRtg).
+
+🔹 Calculation Sequence
+1. Baseline Build: Construct Offense & Defense expectations from PPP (Points per Possession) and Four-Factors (eFG%, TOV%, ORB%, FTr) using the 55/35/10 blend.
+2. Pace / Possessions Estimation: Combine team pace and opponent pace, apply home/away modifier, produce expected possessions per side.
+3. Situational Overlays: Include rest/travel fatigue, foul differential, tempo bias, and free-throw rate tilt.
+4. SoS Adjustment: Opponent-adjust both efficiency layers (lighter weight).
+5. Simulation & Pricing: Drive possession-based simulation → mean & distribution for points. Convert to Fair Spread, Fair Total, Fair ML. Compare vs market → mark EdgeScore.
+6. Volatility Scoring (V 0–100):
+    * From usage uncertainty, pace variance, and foul volatility.
+    * V ≥65: downgrade confidence.
+    * V ≥80: exclude from “Absolute Best.”
+
+🔹 Required Inputs (Populate & Display)
+Pace & Volume
+* Possessions per Game, Opponent Possessions per Game (H/A + last-3).
+Efficiency (Offense/Defense)
+* Offensive/Defensive PPP (H/A + Season).
+* Four Factors (eFG%, TOV%, ORB%, FTr).
+* Red Zone analogs → Rim Finishing %, 3P Rate/3P%, FT Rate.
+Usage / Availability
+* Key player minutes, injuries, foul issues, recent minute shifts.
+* On/off PPP deltas if provided in sheet.
+Situational
+* Travel distance, rest days, back-to-back flags, altitude.
+Market Snapshot
+* Current Spread / ML / Total and juice.
+
+🔹 Output Format
+🧾 Team Report (per Game)
+Metric	Away	Home
+Possessions / Pace		
+Off PPP / Def PPP		
+eFG%		
+Turnover % (O/D)		
+Offensive Rebounding %		
+Free-Throw Rate (O/D)		
+3P% / 3PA Rate		
+Strength of Schedule		
+Volatility (V)		
+Projection Summary
+* Expected Possessions: XX.X
+* Projected Points (A/H): XX.X / XX.X
+* Fair Spread: Home −X.X
+* Fair Total: XX.X
+* Fair ML: Home −XXX / Away +XXX
+* Efficiency Blend: 55% H/A + 35% Season + 10% Last-3
+* SoS Adjust: ±Δ efficiency %
+* Volatility (V): ##
+Injury / Rotation Notes: Key absences and on/off effects summarized.
+
+✅ Picks (Price-Sensitive)
+
+Play: <market side/total> — to <price>
+Confidence: High / Medium / Lean (V=<##>)
+Why:
+• [Driver 1 – e.g., eFG% & pace edge at venue]
+• [Driver 2 – e.g., ORB% advantage vs weak defensive rebounding]
+• [Driver 3 – e.g., SoS correction or foul differential tilt]
+Guardrails
+* PASS if |Fair − Market| ≥ 9 and V ≥ 60.
+* Maintain price discipline (no chasing beyond “to” number).
+* “Absolute Best” only if EdgeScore ≥ 4% and V < 55.
+
+🔹 Example (Structure Only)
+
+Play: Over 226.5 — to −115  
+Confidence: Medium (V=47)  
+Why:
+• Combined projected 72.4 poss (+8% vs league avg)  
+• Both teams top-10 in Off eFG% and FT Rate → elevated efficiency  
+• Thin defensive rotations (foul risk) → pace likely sustained

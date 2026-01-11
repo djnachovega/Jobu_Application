@@ -1,0 +1,197 @@
+Jobu CBB Algorithm – v3.6R1 (Home/Away + Regression • Daily Run) 
+Task: Run the Jobu College Basketball Algorithm on the attached slate of games. Team listed first = Away, second = Home. Evaluate Spread, Moneyline, and Totals. Return only price-disciplined edges with strong modeled probability advantage.
+
+🔹 Core Configuration
+Primary Data Sources (authority order):
+1. Attached CBB Home/Away Split Sheet – canonical
+    * Home/Away: ORtg, DRtg, PPP, pace, 4 Factors (eFG%, TOV%, ORB%, FTr)
+    * 3P% / 3P rate, Rim finishing%, FT% / FTr
+    * Strength of Schedule / opponent tiers (if present)
+    * Rolling windows (L5 / L10) where available
+2. Markets: TeamRankings, Covers, VegasInsider (current odds: Spread, ML, Total).
+3. Injuries/Rotations: Rotowire, Covers, or reliable depth charts.
+4. Venue Context:
+    * Home / Away / Neutral flag
+    * Travel distance, rest days, altitude
+    * Tournament vs regular-season (conf tourneys / MTEs vs true home)
+Data Protocol
+* Treat the attached sheet as truth for team strength and pace.
+* If a field is missing → shrink to season baseline or league average. No fabrication.
+* Use short-name team mapping (e.g., “W Kentucky,” “J Madison”) for joins.
+* For early season (low game counts), empirical-Bayes shrink all splits toward:
+    * Season baseline, then
+    * Conference or national averages if sample is extremely thin.
+
+🔹 Modeling Framework (Jobu Suite CBB Core v3.6R1)
+Component	Weight	Description
+Efficiency	50–55%	Off/Def PPP / ORtg / DRtg, 4 Factors (eFG%, TOV%, ORB%, FTr), venue-conditioned
+Pace / Possessions	15–20%	Possessions per game & opponent possessions per game, with style-clash logic
+Usage / Availability	10–15%	Minutes, injuries, rotation depth, key on/off impact (top 6–7 rotation only)
+FT / 3P Regression	5–10%	Shooting regression for 3P% & FT%, home/road splits, rim vs 3P mix
+Situational / Context	~10%	Travel, rest days, altitude, foul rate, small-conference volatility
+Blend Conditioning (Efficiency & Pace Layers)
+* 55% Home/Away Split
+* 30% Season Baseline
+* 15% Rolling (Last-5 / Last-10) usage + efficiency overlay (if available)
+* If split sample < 3 home or road games → shrink aggressively toward season baseline.
+* For November / early-season games with very low sample sizes:
+    * Cap venue-specific influence at ≤40% of total blend.
+Strength of Schedule (SoS)
+* Use your sheet’s SoS / opponent-adjusted ORtg/DRtg if present:
+    * Adjust offensive and defensive efficiency with a light correction (e.g., ±3–7%).
+* If external SoS (KenPom/Torvik) is used, treat it as a secondary correction, never a primary driver.
+* Distinguish non-conference SoS vs conference SoS when available; in March, lean more on conference-era SoS for in-league matchups and full-season SoS for cross-conference/NCAA games.
+
+🔹 Venue & Neutral-Court Logic
+* Home game:
+    * Use Home splits (ORtg/DRtg, 4 factors) as the main 55% layer.
+* Road game:
+    * Use Away splits as main 55% layer.
+* Neutral court (MTEs, conference tournaments, March):
+    * Start from Season baseline (50%) + H/A splits (50% evenly).
+    * Apply small travel + unfamiliar gym penalty to both offenses unless the sheet flags prior neutral performance.
+    * Reduce HCA swing in foul rate / FT Rate vs true home games.
+* Quasi-Home Neutral (Conference / NCAA):
+    * If the “neutral” site is within a short distance of one campus or clearly favors one fanbase (same state/metro region), treat it as:
+        * Home-court lite:
+            * 35–40% weight to that team’s Home split,
+            * 35–40% to Season baseline,
+            * 20–30% to Away split.
+        * Allow a small HCA bump in foul rate / FT Rate and late-game win prob, but smaller than true home.
+    * If both teams are far from home and crowd split is even → keep pure neutral logic as above.
+
+🔹 Calculation Sequence
+1. Baseline Efficiency Build
+    * For each team:
+        * Construct Offense & Defense expectations from PPP / ORtg / DRtg and 4 Factors (eFG%, TOV%, ORB%, FTr).
+        * Use 55/30/15 blend (H/A, Season, Rolling) with small-sample shrink as above.
+        * Build separate A/H (or neutral) offensive and defensive baselines.
+2. Pace / Possessions Estimation
+    * Combine team tempo and opponent tempo allowed, venue-adjusted.
+    * Introduce style-clash logic:
+        * Fast vs fast → allow pace +5–8% above blended mean.
+        * Slow vs slow → pace −5–8%.
+        * Fast vs slow → tug-of-war: pace biased toward team dictating more possessions in your sheet (press/transition tags if present).
+    * Sanity-check expected possessions vs league norms; hard-cap extreme outliers.
+3. 3P & FT Regression Module
+    * For each team:
+        * Compute Season 3P% and Recent 3P% (L5/L10); regress recent performance toward season mean:
+            * Do not let recent 3P% deviate more than ±3–4 pts from season in the projection.
+        * Apply similar logic to FT%:
+            * Use FT Rate (FTr) + FT% to estimate expected FT scoring; regress FT% toward season/league mean.
+    * Flag 3P-dependent offenses (high 3P rate in sheet) as higher volatility (V bump).
+    * For large arenas / domes (Final Four / National Championship), allow a slight downward bias to 3P efficiency (sightline effect), but cap it at a small adjustment (e.g., −2–3% relative to season).
+4. Usage / Availability & Rotation
+    * Apply rotation info:
+        * Only treat top 6–7 players (starters + 1–2 key bench) as materially impacting team efficiency.
+        * Use minutes / usage from sheet where available; otherwise assume standard starter minutes.
+    * Injuries:
+        * If missing starter / primary creator:
+            * Adjust team ORtg modestly (system-first; cap change at ~8–10% efficiency swing).
+            * Increase V rather than blowing up projections.
+        * If depth hit only (role player out): mostly V bump, small efficiency tweak at most.
+5. Situational Overlays
+    * Add travel, rest, altitude, and foul profile:
+        * Extra rest days: small positive adjustment to ORtg / pace (≤2–3%).
+        * Tough travel + short rest: slight ORtg and/or pace suppression (−2–4%).
+    * Foul profile:
+        * Whistle-heavy teams (high FTr on both O and D) → more FT variance, small bump to Total V.
+    * Tournament / Series Familiarity:
+        * For conference tournaments or March matchups between teams that already played 2+ times:
+            * Slightly tighten variance on pace (teams know each other’s sets).
+            * Allow a modest bump to defensive efficiency if both are well-scouted league foes.
+            * Do not overreact to prior game results; treat them as tiny/context only, not a trend system.
+6. SoS Adjustment
+    * Apply SoS or opponent-adjusted ORtg/DRtg from your sheet:
+        * Soften or harden previous efficiency estimates by a few percent, not wholesale rewrites.
+        * Keep this as a secondary correction behind the raw blended efficiencies.
+7. Simulation & Pricing
+    * Using expected possessions and adjusted Off/Def efficiencies:
+        * Build possession-based scoring distributions for both teams.
+        * Derive mean and distribution for:
+            * Team points (A/H)
+            * Full-game total
+            * Margin of victory
+    * Convert to:
+        * Fair Spread
+        * Fair Total
+        * Fair Moneyline (ML)
+    * Compute EdgeScore vs market lines for side/total/ML.
+8. Volatility Scoring (V 0–100)
+    * Drivers:
+        * Usage uncertainty (injury status, rotation instability, freshmen dependence)
+        * Pace variance (extreme tempo clash)
+        * 3P dependence + 3P regression gap
+        * Foul/FT volatility (high FTr, poor FT shooters)
+        * Small-conference / low-data teams
+    * Guidelines:
+        * V ≥ 80: exclude from “Absolute Best”; generally PASS unless edge is outrageous and well-explained.
+        * V ≥ 65: downgrade confidence tier; require stronger edge.
+        * V < 65: standard gates.
+
+🔹 Required Inputs (Populate & Display)
+Pace & Volume
+* Possessions per Game, Opponent Possessions per Game (H/A + rolling).
+* Expected possessions for each team after style-clash logic.
+Efficiency (Offense / Defense)
+* Offensive/Defensive PPP (H/A + Season + rolling blend).
+* Four Factors: eFG%, Turnover % (O/D), Offensive Rebounding %, Free-Throw Rate (O/D).
+* Red Zone Analogs:
+    * Rim finishing %
+    * 3P Rate / 3P%
+    * FT Rate & FT%
+Usage / Availability
+* Key player minutes & roles (primary creators, big usage wings, rim protectors).
+* Injuries / foul-prone players flagged.
+* On/off PPP deltas if provided in sheet; shrink toward zero if minutes < threshold.
+Situational
+* Travel distance, rest days, back-to-back / 3in5 flags.
+* Altitude / neutral court.
+* Tournament vs regular-season context.
+Market Snapshot
+* Current Spread / ML / Total and juice.
+* Note major line moves only if relevant to drift/trap logic.
+
+🔹 Output Format
+🧾 Team Report (per Game)
+Metric	Away	Home
+Possessions / Pace		
+Off PPP / Def PPP		
+eFG%		
+Turnover % (O/D)		
+Offensive Rebounding %		
+Free-Throw Rate (O/D)		
+3P% / 3PA Rate		
+Strength of Schedule		
+Volatility (V)		
+Projection Summary
+* Expected Possessions: XX.X
+* Projected Points (A/H): XX.X / XX.X
+* Fair Spread: Home −X.X
+* Fair Total: XX.X
+* Fair ML: Home −XXX / Away +XXX
+* Efficiency Blend: 55% H/A + 30% Season + 15% Rolling
+* SoS Adjust: ±Δ efficiency %
+* 3P/FT Regression Note: short text (e.g., “Both running hot from 3; regressed toward season”)
+* Volatility (V): ##
+Injury / Rotation Notes
+* Key absences and on/off effects summarized; flag freshmen/bench volatility if driving V.
+
+🔹 Picks (Price-Sensitive)
+Play: <market side/total> — to <price> Confidence: High / Medium / Lean (V=##)
+Why:
+* [Driver 1 – e.g., blended eFG% & pace edge at venue/neutral]
+* [Driver 2 – e.g., ORB% advantage vs weak defensive rebounding]
+* [Driver 3 – e.g., SoS correction; opponent inflated vs weak schedule]
+* [Driver 4 – e.g., 3P/FT regression angle; high FTr vs foul-prone defense]
+
+🔹 Guardrails
+* Sides / ML: require ≥ 3% price edge vs fair.
+* Totals: require ≥ 3.5–4.0 point cushion vs model median (after pace + regression modules).
+* Trap guardrail:
+    * PASS if |Fair − Market| ≥ 9 and V ≥ 60 (treat as noise/trap).
+* Maintain strict “to” numbers; no chasing beyond play-to line/price.
+* “Absolute Best” only if:
+    * EdgeScore ≥ 4%,
+    * V < 55, and
+    * Side/Total edge meets cushion rules above.

@@ -1,0 +1,113 @@
+Jobu CFB Algorithm – v3.5R1 (VSR) (Slate Run)
+Task: Run the Jobu CFB Algorithm on the attached slate of games. Team listed first = Away, second = Home. Evaluate Spread, Moneyline, Total, 1H, and Team Totals. Publish plays only if price and edge gates are satisfied.
+
+🔹 Pre-Flight Checks
+Data Discipline
+* Use the attached sheet only. No web lookups unless explicitly noted in the Injuries policy.
+* If a field is missing → shrink to season baseline (never fabricate).
+* Team mapping: Apply custom short names (“W Kentucky,” “Middle Tenn,” etc.) to ensure joins.
+* Sanity Checks:
+    * Possessions must land 20–34 → otherwise flag.
+    * Totals outside 31–76 → flag as unrealistic.
+    * If H/A sample too small → empirical Bayes shrink to season baseline.
+
+🔹 1) Inputs (from Sheet)
+Efficiency (Offense / Defense)
+* Off YPP and Def Opp YPP (H/A + Season).
+* PPP & Opp PPP (H/A + Season + Recency overlay).
+Pace / Possessions
+* Plays per Game & Opp Plays per Game (H/A).
+* Use min(Team Plays, Opp Plays Allowed) logic for expected possessions.
+Finishing / Explosives
+* RZ Scoring % (O/D, H/A).
+* 3rd Down % (O/D) + opponent 3D allowed.
+Situational / Discipline
+* Special Teams (FG%, Opp FG%, Punt/Kick efficiency).
+* Penalties per Game / per Play.
+* Strength of Schedule (H/A where available).
+Notes
+* Sheet calc blocks (YPP Spread/Total) = cross-checks only, not model outputs.
+* No ATS/W-L or trend data. Recency = usage/efficiency only.
+
+🔹 2) Modeling Rules (Locked)
+Layer	Logic	Weight / Behavior
+Composite (Sides)	60% PPP + 40% YPP (venue-conditioned).	
+Totals Driver	Median points = PPP × possessions per team; feeds Totals / TT / 1H.	
+Possession Model	min(Team Plays, Opp Plays Allowed) (venue-adjusted).	
+Tempo Feedback	If |spread| ≤ 3 → reduce pace ≈ 15%.	
+Finishing Drives v1	PPP scaled by RZ TD% (70%) + RZ FG% (30%). Both < 50% RZ TD% → cap Totals and Side edges.	
+Penalty Drag	−0.4 to −1.0 pts per ~50 penalty-yd disadvantage (venue-aware).	
+SoS Adjustment	Opponent-adjust efficiency (light EB shrink).	
+Simulation	Drive/possession simulation → point distributions → fair Spread / ML / Total.	
+OT Tax	Apply only for spreads ≤ 3 (+0.3–0.5 pts to Total).	
+🔹 3) Blend Conditioning (Rolling Inputs)
+Component	Weight	Description
+Home/Away Split	55 %	Venue-specific PPP/YPP, RZ, 3D, Pace data.
+Season Baseline	35 %	Stabilizes for opponent quality and sample variance.
+Last 3 Usage Overlay	10 %	Usage only (QB tempo, snap share, role change) — no results trends.
+If split sample < 3 games → shrink proportionally toward Season baseline. Strength-of-Schedule adjustment applies after blending (~25 % of efficiency layer).
+
+🔹 4) Risk & Gates
+Factor	Rule
+Weather Gate	If wind ≥ 12 mph or steady rain → expand variance, throttle Overs, require ≥ +3.5 pt cushion.
+Injuries / Availability	If statuses in sheet → apply role deltas. If unknown → set Q-Gate (V ≥ 65): Totals ≥ 8 % edge, Sides ≥ 3 %. (Optional Rotowire/Covers for QB/OL/DL/skill.)
+Explosives / ST Tax	Opp top-20 explosives or top-15 ST → −0.5 to −1.0 from fave fair line or pivot to TT/1H.
+Weeknight G5 Discipline	≤ 0.5 u default unless edge ≥ 5 %; prefer TT/1H.
+Volatility (V 0–100)	Derived from injury/QB uncertainty, pace, weather, ST. V ≥ 65 = downgrade; V ≥ 80 = exclude from “Absolute Best.”
+🔹 5) Price Discipline (Play-To Numbers)
+Market	Requirement
+Sides / ML	≥ 3 % price edge vs fair.
+Totals	≥ 3.5 pt cushion vs model median (after pace & weather tax).
+Team Totals / 1H	Same logic; avoid correlated exposure.
+Drift Management	If market drifts > 8–10 ¢ against w/out news → half-size or PASS.
+Fair ≈ Market	PASS — no forced plays.
+🔹 6) Output Format (Per Game)
+🧾 Projection Table
+Metric	Away	Home
+PPP / Opp PPP		
+YPP / Opp YPP		
+Plays / Opp Plays		
+RZ TD% / FG% (O/D)		
+3D% (O/D)		
+Penalties (Yds/G / per Play)		
+Special Teams / FG Notes		
+Strength of Schedule		
+Weather		
+Derived Metrics
+* Median Team Totals (A/H)
+* Median 1H Total
+* Median Full-Game Total
+* Median Margin
+* Fair Spread / ML / Total
+* Volatility (V)
+* Efficiency Blend: 55 % H/A + 35 % Season + 10 % Last 3
+Drivers (2–4 bullets)
+* [QB/Injury delta impact]
+* [Weather/Pace adjustment]
+* [Explosives or ST edge]
+* [SoS / Efficiency overlay]
+
+✅ Picks (Price-Sensitive)
+
+Play: <market & side/total> — to <price or number>  
+Confidence: High / Medium / Lean (V=<##>)  
+Why:
+• [Driver 1 – e.g., Off PPP gap + pace suppression]  
+• [Driver 2 – e.g., RZ TD% differential + SoS correction]  
+• [Driver 3 – e.g., QB absence or ST tax adjustment]  
+Kill Switches: QB status flip, major weather change, market drift > gate.
+Derivatives: Quote Team Totals and 1H only when ≥ play-gate cushions. Avoid correlated exposures beyond caps.
+
+🔹 7) Guardrails
+* PASS Sides/Totals if Volatility > 80 or edge < gate.
+* Always display Fair vs Market numbers in table form.
+* Maintain version label Jobu CFB v3.5R1 (VSR) in each run header for traceability.
+
+🔹 Example (Structure Only) 
+
+Play: Over 61.5 — to −115  
+Confidence: Medium (V=52)  
+Why:
+• 55/35/10 blended PPP projects 2.94 vs 2.55 league mean → +15 % efficiency edge.  
+• Both top-20 in Off PPP and RZ TD% > 70 % → finishing advantage.  
+• Weather clean; ST neutral → no suppression risk.

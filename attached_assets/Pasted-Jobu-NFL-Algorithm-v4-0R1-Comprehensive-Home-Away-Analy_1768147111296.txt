@@ -1,0 +1,182 @@
+Jobu NFL Algorithm – v4.0R1 (Comprehensive Home/Away Analytics)
+
+**Task:** Run the enhanced Jobu NFL Algorithm using the complete Home/Away statistical database. Team listed first = Away, second = Home. Evaluate Spread, Moneyline, Total, 1H, and Team Totals with advanced splits analysis.
+
+---
+
+### 🔹 **Enhanced Data Integration**
+
+**Home/Away Splits Priority**
+* Use **Home** stats for home teams, **Away** stats for away teams as primary inputs
+* Apply **55% weight to venue-specific splits**, 35% to 2025 season totals, 10% to Last 3 games
+* For teams with limited home/away sample: empirical Bayes shrink toward season means
+
+**Comprehensive Statistical Layers**
+1. **Core Efficiency Matrix**
+   - Points Per Play (Home/Away splits)
+   - Yards Per Play (Home/Away splits) 
+   - Opponent PPP & YPP (Home/Away defensive splits)
+   - First Downs Per Play (drive sustainability)
+
+2. **Pace & Possession Framework**
+   - Plays Per Game (Home/Away tempo)
+   - Opponent Plays Per Game (defensive pace control)
+   - Expected Possessions = min(Team Plays, Opp Plays Allowed) **with venue adjustment**
+
+3. **Situational Execution Stack**
+   - **Red Zone Efficiency**: Scoring % (Home/Away) + Opponent RZ Defense
+   - **Down Conversion**: 3rd/4th Down % (O/D) with venue splits
+   - **Field Position**: Yards Per Punt Attempt + Kickoff Touchback %
+   - **Field Goal Efficiency**: Points Per Attempt (both teams)
+
+4. **Play-Type & Matchup Analysis**
+   - Pass Play % vs Opponent Pass Defense %
+   - Yards Per Pass Attempt vs Opponent YPPA
+   - Yards Per Rush Attempt vs Opponent YPRA
+   - QB Sack % vs Opponent Sack % (pressure differential)
+
+5. **Discipline & Hidden Yards**
+   - Penalty Yards Per Game (Home/Away)
+   - Penalty First Downs Per Game
+   - Yards Per Penalty
+   - Penalty Per Play rate
+
+---
+
+### 🔹 **Enhanced Modeling Rules**
+
+**Composite Rating System**
+```
+Offensive Rating = (60% PPP + 40% YPP) × Situational Multipliers
+Defensive Rating = (60% Opp PPP + 40% Opp YPP) × Situational Multipliers
+
+Situational Multipliers:
+- RZ Efficiency: 1.0 + (Team RZ% - League Avg) × 0.5
+- 3rd Down Efficiency: 1.0 + (3D% - League Avg) × 0.3  
+- Penalty Impact: 1.0 - (Penalty Yds/G Differential ÷ 50) × 0.1
+```
+
+**Possession & Tempo Modeling**
+```
+Expected Possessions = min(
+  Team Plays (venue-adjusted), 
+  Opponent Plays Allowed (venue-adjusted)
+)
+
+If |spread| ≤ 3 → apply 15% pace reduction
+If weather wind ≥ 12 mph → apply 20% pace reduction
+```
+
+**Scoring Projection Engine**
+```
+Team Projected Points = 
+  (Offensive Rating × Expected Possessions × 0.85) +
+  (Defensive Rating Differential × 2.5) +
+  Special Teams Contribution +
+  Penalty Impact Adjustment
+```
+
+---
+
+### 🔹 **Advanced Matchup Analysis**
+
+**Passing Game Matchup**
+```
+Passing Edge = (Team YPA - Opponent YPPA Allowed) × Pass Play %
+If differential > +1.0 → boost projection by 3-7%
+If differential < -1.0 → reduce projection by 3-7%
+```
+
+**Rushing Game Matchup**  
+```
+Rushing Edge = (Team YPR - Opponent YPRA Allowed) × (1 - Pass Play %)
+Apply similar adjustment scale as passing
+```
+
+**Pressure Differential**
+```
+Sack Rate Gap = (Opponent Sack % - Team Sack % Allowed)
+If gap > +3% → reduce disadvantaged QB projection by 2-4%
+```
+
+---
+
+### 🔹 **Enhanced Risk Framework**
+
+**Volatility Factors (V-Score 0-100)**
+- **QB Stability**: Sack rate differential + recent performance variance
+- **Penalty Discipline**: Yards per game differential > 15 = +10 V-Score
+- **Red Zone Consistency**: Home/Away RZ% variance > 20% = +15 V-Score  
+- **Pace Volatility**: Home/Away plays variance > 8 = +12 V-Score
+- **Special Teams**: Punt/KO efficiency bottom-10 = +8 V-Score
+
+**Weather Gates (Enhanced)**
+- Wind 12-18 mph: Reduce totals by 3-4 points, require +4 pt edge
+- Wind 18+ mph: Reduce totals by 5-7 points, pivot to unders/team totals
+- Rain: Reduce passing efficiency by 15-25%, boost rushing projections
+
+---
+
+### 🔹 **Output Enhancement**
+
+**🧾 Comprehensive Projection Table**
+```
+Metric                | Away Team         | Home Team
+---------------------------------------------------------
+Points Per Play       | 0.45 (H: 0.42)   | 0.52 (A: 0.48)
+Yards Per Play        | 5.8 (H: 5.6)     | 6.1 (A: 5.9)
+Expected Possessions  | 11.2             | 11.8
+RZ Scoring %          | 68% (H: 72%)     | 71% (A: 65%)
+3rd Down %           | 42% (H: 45%)     | 48% (A: 44%)
+Penalty Yds/G         | 52 (H: 48)       | 45 (A: 50)
+Sack Rate             | 6.1%             | 8.4%
+Pass/Rush Split       | 58/42            | 54/46
+Strength of Schedule  | +1.2             | -0.8
+```
+
+**Key Matchup Drivers**
+1. **[Home/Road Splits]**: Home team +12% PPP at home vs away
+2. **[Pressure Differential]**: Home team sack advantage +2.3%
+3. **[Pace Control]**: Away team forces 2.2 fewer opponent plays on road  
+4. **[Red Zone Defense]**: Home team allows 58% RZ scoring vs 67% on road
+
+**✅ Enhanced Pick Format**
+```
+Play: [Market & Side] — to [Price/Number]
+Confidence: High/Medium/Lean (V=##)
+Edge: +X.X% | Volatility: Low/Medium/High
+
+Why:
+• [Primary Driver] – Home/Road efficiency gap + venue-specific execution
+• [Matchup Edge] – Passing game advantage vs weak secondary (YPPA diff: +1.2)
+• [Situational Factor] – Penalty discipline favors home team (-8 yds/gm)
+• [Pace/Tempo] – Expected possession advantage +2.3%
+
+Kill Switches: QB status change, weather deterioration, line movement >7¢
+Derivatives: Team Total Over [Number] (edge: +Y.Y%)
+```
+
+---
+
+### 🔹 **Quality Gates (Enhanced)**
+
+**Data Quality Checks**
+- Home/Away sample ≥ 3 games for split usage
+- Cross-validate possession math: (Plays + Opp Plays) ÷ 2 = 24-32 range
+- Verify special teams data completeness
+- Flag teams with >20% home/away efficiency variance
+
+**Play Qualification**
+```
+Sides: ≥ 3% price edge AND V-Score ≤ 75
+Totals: ≥ 3.5 pt cushion AND V-Score ≤ 70
+Team Totals: ≥ 4 pt cushion AND matchup-specific rationale
+High-Volatility (V≥65): Require +1% additional edge
+```
+
+**Market Movement Protocol**
+- Drift > 8¢ without news: Reduce position size 50%
+- Drift > 12¢: PASS regardless of edge
+- Correlated plays: Max 2 related positions per game
+
+---

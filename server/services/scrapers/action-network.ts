@@ -38,9 +38,32 @@ export async function loginToActionNetwork(
     await waitAndType(page, emailSelector, credentials.email);
     await waitAndType(page, passwordSelector, credentials.password);
     
-    // Click login button
-    const loginButtonSelector = 'button[type="submit"], input[type="submit"], button:contains("Log In")';
-    await waitAndClick(page, loginButtonSelector);
+    // Click login button - use XPath for text matching since Puppeteer doesn't support :contains()
+    const loginClicked = await page.evaluate(() => {
+      // Try standard selectors first
+      const submitBtn = document.querySelector('button[type="submit"], input[type="submit"]');
+      if (submitBtn) {
+        (submitBtn as HTMLElement).click();
+        return true;
+      }
+      // Fall back to finding button by text
+      const buttons = Array.from(document.querySelectorAll('button'));
+      const loginBtn = buttons.find(btn => 
+        btn.textContent?.toLowerCase().includes('log in') || 
+        btn.textContent?.toLowerCase().includes('login') ||
+        btn.textContent?.toLowerCase().includes('sign in')
+      );
+      if (loginBtn) {
+        loginBtn.click();
+        return true;
+      }
+      return false;
+    });
+    
+    if (!loginClicked) {
+      console.error("Could not find login button");
+      return false;
+    }
     
     // Wait for navigation after login
     await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 15000 });

@@ -59,6 +59,7 @@ export interface IStorage {
   getGamesToday(sports?: string[]): Promise<Game[]>;
   createGame(game: InsertGame): Promise<Game>;
   updateGame(id: number, game: Partial<InsertGame>): Promise<Game | undefined>;
+  findOrCreateGame(game: InsertGame): Promise<Game>;
 
   // Odds
   getOddsForGame(gameId: number): Promise<Odds[]>;
@@ -199,6 +200,31 @@ export class DatabaseStorage implements IStorage {
       .where(eq(games.id, id))
       .returning();
     return updated;
+  }
+
+  async findOrCreateGame(game: InsertGame): Promise<Game> {
+    // Look for existing game with same teams and date (within same day)
+    const gameDate = game.gameDate;
+    const startOfDay = new Date(gameDate);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(startOfDay);
+    endOfDay.setDate(endOfDay.getDate() + 1);
+
+    const [existing] = await db.select().from(games)
+      .where(and(
+        eq(games.awayTeamName, game.awayTeamName),
+        eq(games.homeTeamName, game.homeTeamName),
+        eq(games.sport, game.sport),
+        gte(games.gameDate, startOfDay),
+        lte(games.gameDate, endOfDay)
+      ))
+      .limit(1);
+
+    if (existing) {
+      return existing;
+    }
+
+    return this.createGame(game);
   }
 
   // Odds

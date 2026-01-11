@@ -1,13 +1,7 @@
-// Scraper exports
-export { scrapeActionNetwork } from "./action-network";
-export { scrapeKenPom } from "./kenpom";
-export { scrapeTeamRankings, scrapeFromUrl } from "./teamrankings";
-export { getBrowser, closeBrowser } from "./browser-utils";
-
 import { storage } from "../../storage";
-import { scrapeActionNetwork } from "./action-network";
-import { scrapeKenPom } from "./kenpom";
-import { scrapeTeamRankings } from "./teamrankings";
+import { scrapeActionNetworkHttp } from "./actionnetwork-http";
+import { scrapeKenPomHttp } from "./kenpom-http";
+import { scrapeTeamRankingsHttp } from "./teamrankings-http";
 
 export type ScraperName = "actionnetwork" | "teamrankings" | "kenpom";
 
@@ -24,7 +18,7 @@ export async function runScraper(name: ScraperName, sports?: string[]): Promise<
   try {
     switch (name) {
       case "actionnetwork": {
-        const result = await scrapeActionNetwork(sports);
+        const result = await scrapeActionNetworkHttp(sports);
         
         if (!result.success) {
           return {
@@ -35,10 +29,8 @@ export async function runScraper(name: ScraperName, sports?: string[]): Promise<
           };
         }
         
-        // Store the scraped data
         let processed = 0;
         for (const gameData of result.games) {
-          // Create or find game (deduplication)
           if (gameData.game.awayTeamName && gameData.game.homeTeamName) {
             const game = await storage.findOrCreateGame({
               awayTeamName: gameData.game.awayTeamName,
@@ -48,7 +40,6 @@ export async function runScraper(name: ScraperName, sports?: string[]): Promise<
               status: "scheduled",
             });
             
-            // Store odds if any data exists (spread, total, or moneyline)
             const hasOdds = gameData.odds.spreadHome !== undefined || 
                            gameData.odds.spreadAway !== undefined ||
                            gameData.odds.totalOver !== undefined ||
@@ -71,7 +62,6 @@ export async function runScraper(name: ScraperName, sports?: string[]): Promise<
               });
             }
             
-            // Store betting percentages
             for (const pct of gameData.bettingPercentages) {
               if (pct.ticketPercentage || pct.moneyPercentage) {
                 await storage.createBettingPercentage({
@@ -80,21 +70,6 @@ export async function runScraper(name: ScraperName, sports?: string[]): Promise<
                   side: pct.side || "home",
                   ticketPercentage: pct.ticketPercentage || 50,
                   moneyPercentage: pct.moneyPercentage || 50,
-                });
-              }
-            }
-            
-            // Store line movements if available
-            for (const movement of gameData.lineMovements) {
-              if (movement.previousLine !== undefined && movement.newLine !== undefined) {
-                await storage.createLineMovement({
-                  gameId: game.id,
-                  sportsbook: movement.sportsbook || "consensus",
-                  marketType: movement.marketType || "spread",
-                  previousLine: movement.previousLine,
-                  newLine: movement.newLine,
-                  previousOdds: movement.previousOdds,
-                  newOdds: movement.newOdds,
                 });
               }
             }
@@ -111,7 +86,7 @@ export async function runScraper(name: ScraperName, sports?: string[]): Promise<
       }
       
       case "kenpom": {
-        const result = await scrapeKenPom();
+        const result = await scrapeKenPomHttp();
         
         if (!result.success) {
           return {
@@ -122,7 +97,6 @@ export async function runScraper(name: ScraperName, sports?: string[]): Promise<
           };
         }
         
-        // Store team stats
         let processed = 0;
         for (const team of result.teams) {
           await storage.upsertTeamStats(team);
@@ -137,7 +111,7 @@ export async function runScraper(name: ScraperName, sports?: string[]): Promise<
       }
       
       case "teamrankings": {
-        const result = await scrapeTeamRankings(sports);
+        const result = await scrapeTeamRankingsHttp(sports);
         
         if (!result.success) {
           return {
@@ -148,7 +122,6 @@ export async function runScraper(name: ScraperName, sports?: string[]): Promise<
           };
         }
         
-        // Store team stats
         let processed = 0;
         for (const team of result.teams) {
           await storage.upsertTeamStats(team);

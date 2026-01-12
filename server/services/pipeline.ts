@@ -89,21 +89,31 @@ export async function runFullPipeline(
   }
   
   try {
-    console.log("Step 2: Getting today's games...");
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    const todayEnd = new Date();
-    todayEnd.setHours(23, 59, 59, 999);
+    console.log("Step 2: Getting today's games (Eastern timezone)...");
+    // Use Eastern timezone (EST = UTC-5) for sports
+    const now = new Date();
+    const easternNow = new Date(now.getTime() - 5 * 60 * 60 * 1000);
+    
+    // Get start of today in Eastern time (midnight Eastern)
+    const todayEasternMidnight = new Date(easternNow);
+    todayEasternMidnight.setUTCHours(0, 0, 0, 0);
+    
+    // Convert Eastern midnight to UTC (add 5 hours)
+    // Midnight Eastern = 5am UTC
+    const todayStartUtc = new Date(todayEasternMidnight.getTime() + 5 * 60 * 60 * 1000);
+    const todayEndUtc = new Date(todayStartUtc.getTime() + 24 * 60 * 60 * 1000);
+    
+    console.log(`UTC range: ${todayStartUtc.toISOString()} to ${todayEndUtc.toISOString()}`);
     
     const todaysGames = await db
       .select()
       .from(games)
       .where(and(
-        gte(games.gameDate, todayStart),
-        lte(games.gameDate, todayEnd)
+        gte(games.gameDate, todayStartUtc),
+        lte(games.gameDate, todayEndUtc)
       ));
     
-    console.log(`Found ${todaysGames.length} games for today`);
+    console.log(`Found ${todaysGames.length} games for today (Eastern: ${easternNow.toISOString().split('T')[0]})`);
     
     console.log("Step 3: Generating projections...");
     for (const game of todaysGames) {

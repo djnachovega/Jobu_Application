@@ -5,9 +5,19 @@ import { TrendingUp, TrendingDown, AlertTriangle, CheckCircle, Clock } from "luc
 import { cn } from "@/lib/utils";
 import type { Opportunity, Game } from "@shared/schema";
 
+interface GameInfo {
+  id?: number;
+  sport?: string;
+  awayTeamName?: string;
+  homeTeamName?: string;
+  gameDate?: string | Date;
+  venue?: string;
+  status?: string;
+}
+
 interface OpportunityCardProps {
   opportunity: Opportunity;
-  game?: Partial<Game>;
+  game?: GameInfo;
   onClick?: () => void;
 }
 

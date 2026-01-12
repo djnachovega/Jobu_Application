@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useLocation, useSearch } from "wouter";
 import { OpportunityCard } from "@/components/opportunity-card";
 import { NoOpportunities } from "@/components/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -18,9 +19,24 @@ import {
   Search,
   Filter,
   SortAsc,
-  SortDesc
+  SortDesc,
+  X,
+  ArrowLeft
 } from "lucide-react";
+import { Link } from "wouter";
 import type { Opportunity, Game } from "@shared/schema";
+
+interface OpportunityWithGame extends Opportunity {
+  game?: {
+    id: number;
+    sport: string;
+    awayTeamName: string;
+    homeTeamName: string;
+    gameDate: string;
+    venue?: string;
+    status?: string;
+  };
+}
 
 interface OpportunitiesPageProps {
   activeSports: string[];
@@ -31,6 +47,11 @@ type ConfidenceFilter = "all" | "High" | "Medium" | "Lean";
 type MarketFilter = "all" | "spread" | "total" | "moneyline";
 
 export function OpportunitiesPage({ activeSports }: OpportunitiesPageProps) {
+  const searchParams = useSearch();
+  const [, navigate] = useLocation();
+  const gameIdParam = new URLSearchParams(searchParams).get("gameId");
+  const gameId = gameIdParam ? parseInt(gameIdParam) : undefined;
+  
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<SortOption>("edge");
   const [sortDesc, setSortDesc] = useState(true);
@@ -38,16 +59,21 @@ export function OpportunitiesPage({ activeSports }: OpportunitiesPageProps) {
   const [marketFilter, setMarketFilter] = useState<MarketFilter>("all");
   const [rlmOnly, setRlmOnly] = useState(false);
 
-  const sportsParam = activeSports.length > 0 ? `?sports=${activeSports.join(",")}` : "";
+  const sportsParam = activeSports.length > 0 ? `sports=${activeSports.join(",")}` : "";
+  const gameIdQueryParam = gameId ? `gameId=${gameId}` : "";
+  const queryParams = [sportsParam, gameIdQueryParam].filter(Boolean).join("&");
+  const queryString = queryParams ? `?${queryParams}` : "";
   
-  const { data: opportunities, isLoading, refetch } = useQuery<Opportunity[]>({
-    queryKey: ["/api/opportunities", activeSports],
+  const { data: opportunities, isLoading, refetch } = useQuery<OpportunityWithGame[]>({
+    queryKey: ["/api/opportunities", activeSports, gameId],
     queryFn: async () => {
-      const res = await fetch(`/api/opportunities${sportsParam}`);
+      const res = await fetch(`/api/opportunities${queryString}`);
       if (!res.ok) throw new Error("Failed to fetch opportunities");
       return res.json();
     },
   });
+  
+  const selectedGame = gameId && opportunities?.[0]?.game;
 
   const filtered = (opportunities || [])
     .filter(opp => {
@@ -87,20 +113,47 @@ export function OpportunitiesPage({ activeSports }: OpportunitiesPageProps) {
     <div className="space-y-6" data-testid="opportunities-page">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Opportunities</h1>
+          {gameId && (
+            <Link href="/opportunities">
+              <Button variant="ghost" size="sm" className="mb-2 -ml-2" data-testid="button-back-all">
+                <ArrowLeft className="h-4 w-4 mr-1" />
+                All Opportunities
+              </Button>
+            </Link>
+          )}
+          <h1 className="text-2xl font-semibold">
+            {selectedGame 
+              ? `${selectedGame.awayTeamName} @ ${selectedGame.homeTeamName}` 
+              : "Opportunities"}
+          </h1>
           <p className="text-sm text-muted-foreground">
-            {filtered.length} active opportunities across all markets
+            {gameId 
+              ? `${filtered.length} plays for this game`
+              : `${filtered.length} active opportunities across all markets`}
           </p>
         </div>
-        <Button 
-          variant="outline" 
-          size="sm"
-          onClick={() => refetch()}
-          data-testid="button-refresh-opportunities"
-        >
-          <RefreshCw className="h-4 w-4 mr-2" />
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          {gameId && (
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={() => navigate("/opportunities")}
+              data-testid="button-clear-filter"
+            >
+              <X className="h-4 w-4 mr-1" />
+              Clear Filter
+            </Button>
+          )}
+          <Button 
+            variant="outline" 
+            size="sm"
+            onClick={() => refetch()}
+            data-testid="button-refresh-opportunities"
+          >
+            <RefreshCw className="h-4 w-4 mr-2" />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-3 p-4 rounded-lg bg-card border">
@@ -199,6 +252,7 @@ export function OpportunitiesPage({ activeSports }: OpportunitiesPageProps) {
             <OpportunityCard 
               key={opp.id} 
               opportunity={opp}
+              game={opp.game}
               onClick={() => {}}
             />
           ))}

@@ -170,24 +170,25 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getGamesToday(sports?: string[]): Promise<Game[]> {
-    // Use Eastern timezone for sports (US-centric)
+    // Get current date in Eastern timezone (EST = UTC-5)
     const now = new Date();
-    const easternOffset = -5 * 60; // EST is UTC-5 (simplified, doesn't account for DST)
-    const localOffset = now.getTimezoneOffset();
-    const easternNow = new Date(now.getTime() + (localOffset - easternOffset) * 60 * 1000);
+    // Convert to Eastern by subtracting 5 hours from UTC
+    const easternNow = new Date(now.getTime() - 5 * 60 * 60 * 1000);
     
-    // Get today in Eastern time
-    const todayEastern = new Date(easternNow);
-    todayEastern.setHours(0, 0, 0, 0);
+    // Get start of today in Eastern time (midnight Eastern)
+    const todayEasternMidnight = new Date(easternNow);
+    todayEasternMidnight.setUTCHours(0, 0, 0, 0);
     
-    // Convert back to UTC for database query
-    const todayStart = new Date(todayEastern.getTime() - (localOffset - easternOffset) * 60 * 1000);
-    const tomorrowStart = new Date(todayStart);
-    tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+    // Convert Eastern midnight back to UTC (add 5 hours)
+    // Midnight Eastern = 5am UTC
+    const todayStartUtc = new Date(todayEasternMidnight.getTime() + 5 * 60 * 60 * 1000);
+    const tomorrowStartUtc = new Date(todayStartUtc.getTime() + 24 * 60 * 60 * 1000);
+    
+    console.log(`getGamesToday: Eastern date=${easternNow.toISOString().split('T')[0]}, UTC range: ${todayStartUtc.toISOString()} to ${tomorrowStartUtc.toISOString()}`);
 
     let conditions = and(
-      gte(games.gameDate, todayStart),
-      lte(games.gameDate, tomorrowStart)
+      gte(games.gameDate, todayStartUtc),
+      lte(games.gameDate, tomorrowStartUtc)
     );
 
     if (sports && sports.length > 0) {

@@ -15,7 +15,7 @@ import {
   RefreshCw,
   ArrowRight
 } from "lucide-react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import type { Opportunity, Game, Odds } from "@shared/schema";
 
 interface DashboardProps {
@@ -35,6 +35,7 @@ interface GameWithOdds extends Game {
 }
 
 export function Dashboard({ activeSports }: DashboardProps) {
+  const [, navigate] = useLocation();
   const sportsParam = activeSports.length > 0 ? `?sports=${activeSports.join(",")}` : "";
   
   const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
@@ -160,7 +161,8 @@ export function Dashboard({ activeSports }: DashboardProps) {
               <OpportunityCard 
                 key={opp.id} 
                 opportunity={opp}
-                onClick={() => {}}
+                game={(opp as any).game}
+                onClick={() => navigate(`/opportunities?gameId=${opp.gameId}`)}
               />
             ))}
           </div>
@@ -202,7 +204,7 @@ export function Dashboard({ activeSports }: DashboardProps) {
                 odds={game.latestOdds}
                 hasOpportunity={(game.opportunityCount ?? 0) > 0}
                 opportunityCount={game.opportunityCount}
-                onClick={() => {}}
+                onClick={() => navigate(`/opportunities?gameId=${game.id}`)}
               />
             ))}
           </div>

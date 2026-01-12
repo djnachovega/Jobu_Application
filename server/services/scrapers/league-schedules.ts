@@ -10,81 +10,28 @@ interface LeagueGame {
   status?: string;
 }
 
+// Get today's date in Eastern time as YYYYMMDD format
+function getTodayEastern(): string {
+  const now = new Date();
+  // Simple EST offset (-5 hours from UTC)
+  const easternTime = new Date(now.getTime() - 5 * 60 * 60 * 1000);
+  const year = easternTime.getUTCFullYear();
+  const month = String(easternTime.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(easternTime.getUTCDate()).padStart(2, '0');
+  return `${year}${month}${day}`;
+}
+
 export async function scrapeNBASchedule(): Promise<{ success: boolean; games: LeagueGame[]; error?: string }> {
   const games: LeagueGame[] = [];
   
   try {
     const { client } = createHttpClient();
+    const todayStr = getTodayEastern();
     
-    const today = new Date().toISOString().split("T")[0].replace(/-/g, "");
-    const url = `https://cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json`;
+    // Use ESPN API with specific date to get today's games in Eastern time
+    const url = `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=${todayStr}`;
     
-    console.log(`Fetching NBA schedule from: ${url}`);
-    
-    const response = await client.get(url);
-    const data = response.data;
-    
-    if (data?.scoreboard?.games) {
-      for (const game of data.scoreboard.games) {
-        games.push({
-          awayTeam: game.awayTeam?.teamName || game.awayTeam?.teamCity,
-          homeTeam: game.homeTeam?.teamName || game.homeTeam?.teamCity,
-          gameDate: new Date(game.gameTimeUTC || game.gameEt),
-          externalId: game.gameId,
-          venue: game.arenaName,
-          status: game.gameStatus === 1 ? "scheduled" : game.gameStatus === 2 ? "live" : "final",
-        });
-      }
-    }
-    
-    console.log(`NBA: Found ${games.length} games for today`);
-    return { success: true, games };
-  } catch (error: any) {
-    console.error("NBA schedule error:", error.message);
-    
-    try {
-      const { client } = createHttpClient();
-      const fallbackUrl = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard";
-      console.log(`Trying ESPN fallback: ${fallbackUrl}`);
-      
-      const response = await client.get(fallbackUrl);
-      const data = response.data;
-      
-      if (data?.events) {
-        for (const event of data.events) {
-          const competitors = event.competitions?.[0]?.competitors || [];
-          const away = competitors.find((c: any) => c.homeAway === "away");
-          const home = competitors.find((c: any) => c.homeAway === "home");
-          
-          if (away && home) {
-            games.push({
-              awayTeam: away.team?.displayName || away.team?.name,
-              homeTeam: home.team?.displayName || home.team?.name,
-              gameDate: new Date(event.date),
-              externalId: event.id,
-              venue: event.competitions?.[0]?.venue?.fullName,
-              status: event.status?.type?.name?.toLowerCase() || "scheduled",
-            });
-          }
-        }
-      }
-      
-      console.log(`NBA (ESPN): Found ${games.length} games`);
-      return { success: true, games };
-    } catch (espnError: any) {
-      return { success: false, games: [], error: espnError.message };
-    }
-  }
-}
-
-export async function scrapeNFLSchedule(): Promise<{ success: boolean; games: LeagueGame[]; error?: string }> {
-  const games: LeagueGame[] = [];
-  
-  try {
-    const { client } = createHttpClient();
-    const url = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard";
-    
-    console.log(`Fetching NFL schedule from: ${url}`);
+    console.log(`Fetching NBA schedule from: ${url} (date: ${todayStr})`);
     
     const response = await client.get(url);
     const data = response.data;
@@ -108,7 +55,47 @@ export async function scrapeNFLSchedule(): Promise<{ success: boolean; games: Le
       }
     }
     
-    console.log(`NFL: Found ${games.length} games`);
+    console.log(`NBA: Found ${games.length} games for ${todayStr}`);
+    return { success: true, games };
+  } catch (error: any) {
+    console.error("NBA schedule error:", error.message);
+    return { success: false, games: [], error: error.message };
+  }
+}
+
+export async function scrapeNFLSchedule(): Promise<{ success: boolean; games: LeagueGame[]; error?: string }> {
+  const games: LeagueGame[] = [];
+  
+  try {
+    const { client } = createHttpClient();
+    const todayStr = getTodayEastern();
+    const url = `https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates=${todayStr}`;
+    
+    console.log(`Fetching NFL schedule from: ${url} (date: ${todayStr})`);
+    
+    const response = await client.get(url);
+    const data = response.data;
+    
+    if (data?.events) {
+      for (const event of data.events) {
+        const competitors = event.competitions?.[0]?.competitors || [];
+        const away = competitors.find((c: any) => c.homeAway === "away");
+        const home = competitors.find((c: any) => c.homeAway === "home");
+        
+        if (away && home) {
+          games.push({
+            awayTeam: away.team?.displayName || away.team?.name,
+            homeTeam: home.team?.displayName || home.team?.name,
+            gameDate: new Date(event.date),
+            externalId: event.id,
+            venue: event.competitions?.[0]?.venue?.fullName,
+            status: event.status?.type?.name?.toLowerCase() || "scheduled",
+          });
+        }
+      }
+    }
+    
+    console.log(`NFL: Found ${games.length} games for ${todayStr}`);
     return { success: true, games };
   } catch (error: any) {
     console.error("NFL schedule error:", error.message);
@@ -121,9 +108,10 @@ export async function scrapeCFBSchedule(): Promise<{ success: boolean; games: Le
   
   try {
     const { client } = createHttpClient();
-    const url = "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?limit=100";
+    const todayStr = getTodayEastern();
+    const url = `https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?dates=${todayStr}&limit=100`;
     
-    console.log(`Fetching CFB schedule from: ${url}`);
+    console.log(`Fetching CFB schedule from: ${url} (date: ${todayStr})`);
     
     const response = await client.get(url);
     const data = response.data;
@@ -147,7 +135,7 @@ export async function scrapeCFBSchedule(): Promise<{ success: boolean; games: Le
       }
     }
     
-    console.log(`CFB: Found ${games.length} games`);
+    console.log(`CFB: Found ${games.length} games for ${todayStr}`);
     return { success: true, games };
   } catch (error: any) {
     console.error("CFB schedule error:", error.message);
@@ -160,9 +148,10 @@ export async function scrapeCBBSchedule(): Promise<{ success: boolean; games: Le
   
   try {
     const { client } = createHttpClient();
-    const url = "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?limit=100";
+    const todayStr = getTodayEastern();
+    const url = `https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?dates=${todayStr}&limit=100`;
     
-    console.log(`Fetching CBB schedule from: ${url}`);
+    console.log(`Fetching CBB schedule from: ${url} (date: ${todayStr})`);
     
     const response = await client.get(url);
     const data = response.data;
@@ -186,7 +175,7 @@ export async function scrapeCBBSchedule(): Promise<{ success: boolean; games: Le
       }
     }
     
-    console.log(`CBB: Found ${games.length} games`);
+    console.log(`CBB: Found ${games.length} games for ${todayStr}`);
     return { success: true, games };
   } catch (error: any) {
     console.error("CBB schedule error:", error.message);

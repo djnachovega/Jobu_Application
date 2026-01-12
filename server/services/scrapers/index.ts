@@ -1,10 +1,10 @@
 import { storage } from "../../storage";
 import { scrapeTeamRankingsHttp } from "./teamrankings-http";
-import { scrapeCoversOdds } from "./covers-http";
+import { scrapeCoversOdds, scrapeCoversConsensus } from "./covers-http";
 import { scrapeAllSchedules, scrapeNBASchedule, scrapeNFLSchedule, scrapeCFBSchedule, scrapeCBBSchedule } from "./league-schedules";
 import { getOrCreateTeam } from "../team-resolver";
 
-export type ScraperName = "teamrankings" | "covers" | "schedules" | "nba" | "nfl" | "cfb" | "cbb";
+export type ScraperName = "teamrankings" | "covers" | "covers_percentages" | "schedules" | "nba" | "nfl" | "cfb" | "cbb";
 
 export interface ScraperResult {
   success: boolean;
@@ -102,6 +102,77 @@ export async function runScraper(name: ScraperName, sports?: string[]): Promise<
         return {
           success: true,
           message: `Scraped ${processed} games from Covers.com`,
+          recordsProcessed: processed,
+        };
+      }
+      
+      case "covers_percentages": {
+        const result = await scrapeCoversConsensus(sports);
+        
+        if (!result.success) {
+          return {
+            success: false,
+            message: "Covers.com betting percentages scrape failed",
+            recordsProcessed: 0,
+            error: result.error,
+          };
+        }
+        
+        let processed = 0;
+        for (const pct of result.percentages) {
+          const game = await storage.findGameByTeams(
+            pct.awayTeam,
+            pct.homeTeam,
+            pct.sport
+          );
+          
+          if (game) {
+            if (pct.spreadAwayTicketPct !== null) {
+              await storage.createBettingPercentage({
+                gameId: game.id,
+                marketType: "spread",
+                side: "away",
+                ticketPercentage: pct.spreadAwayTicketPct,
+                moneyPercentage: pct.spreadAwayMoneyPct ?? pct.spreadAwayTicketPct,
+              });
+              processed++;
+            }
+            if (pct.spreadHomeTicketPct !== null) {
+              await storage.createBettingPercentage({
+                gameId: game.id,
+                marketType: "spread",
+                side: "home",
+                ticketPercentage: pct.spreadHomeTicketPct,
+                moneyPercentage: pct.spreadHomeMoneyPct ?? pct.spreadHomeTicketPct,
+              });
+              processed++;
+            }
+            if (pct.totalOverTicketPct !== null) {
+              await storage.createBettingPercentage({
+                gameId: game.id,
+                marketType: "total",
+                side: "over",
+                ticketPercentage: pct.totalOverTicketPct,
+                moneyPercentage: pct.totalOverMoneyPct ?? pct.totalOverTicketPct,
+              });
+              processed++;
+            }
+            if (pct.totalUnderTicketPct !== null) {
+              await storage.createBettingPercentage({
+                gameId: game.id,
+                marketType: "total",
+                side: "under",
+                ticketPercentage: pct.totalUnderTicketPct,
+                moneyPercentage: pct.totalUnderMoneyPct ?? pct.totalUnderTicketPct,
+              });
+              processed++;
+            }
+          }
+        }
+        
+        return {
+          success: true,
+          message: `Scraped betting percentages for ${processed} records from Covers.com`,
           recordsProcessed: processed,
         };
       }

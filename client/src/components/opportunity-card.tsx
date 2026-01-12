@@ -91,36 +91,72 @@ export function OpportunityCard({ opportunity, game, onClick }: OpportunityCardP
             <p className="text-xs text-muted-foreground mb-1">Edge</p>
             <p className={cn(
               "font-mono text-sm font-semibold",
-              opportunity.edgePercentage >= 4 ? "text-green-500" : "text-foreground"
+              opportunity.edgePercentage >= 4 ? "text-green-500" : 
+              opportunity.edgePercentage >= 2.5 ? "text-yellow-500" : "text-foreground"
             )}>
               {opportunity.edgePercentage >= 0 ? "+" : ""}{opportunity.edgePercentage.toFixed(1)}%
             </p>
           </div>
           <div>
-            <p className="text-xs text-muted-foreground mb-1">Current</p>
+            <p className="text-xs text-muted-foreground mb-1">Market</p>
             <p className="font-mono text-sm font-semibold">
-              {opportunity.currentLine !== null ? opportunity.currentLine : "—"}
+              {opportunity.currentLine !== null ? 
+                (opportunity.currentLine > 0 ? "+" : "") + opportunity.currentLine : "—"}
             </p>
           </div>
           <div>
             <p className="text-xs text-muted-foreground mb-1">Fair</p>
             <p className="font-mono text-sm font-semibold">
-              {opportunity.fairLine !== null ? opportunity.fairLine?.toFixed(1) : "—"}
+              {opportunity.fairLine !== null ? 
+                (opportunity.fairLine > 0 ? "+" : "") + opportunity.fairLine?.toFixed(1) : "—"}
             </p>
           </div>
         </div>
 
+        {opportunity.currentLine !== null && opportunity.fairLine !== null && (
+          <div className="mt-2 flex items-center justify-center">
+            {Math.abs(opportunity.currentLine - opportunity.fairLine) >= 1 ? (
+              <div className="flex items-center gap-1 text-xs text-green-500">
+                <TrendingUp className="h-3 w-3" />
+                <span>{Math.abs(opportunity.currentLine - opportunity.fairLine).toFixed(1)} pts of value</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                <span>{Math.abs(opportunity.currentLine - opportunity.fairLine).toFixed(1)} pts edge</span>
+              </div>
+            )}
+          </div>
+        )}
+
         {(opportunity.ticketPercentage || opportunity.moneyPercentage) && (
           <>
             <Separator className="my-3" />
-            <div className="grid grid-cols-2 gap-4 text-center">
-              <div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="text-center">
                 <p className="text-xs text-muted-foreground mb-1">Tickets</p>
-                <p className="font-mono text-sm">{opportunity.ticketPercentage?.toFixed(0)}%</p>
+                <div className="relative h-2 rounded-full bg-muted overflow-hidden">
+                  <div 
+                    className="absolute left-0 top-0 h-full bg-blue-500/70 rounded-full"
+                    style={{ width: `${opportunity.ticketPercentage || 0}%` }}
+                  />
+                </div>
+                <p className="font-mono text-xs mt-1">{opportunity.ticketPercentage?.toFixed(0)}%</p>
               </div>
-              <div>
+              <div className="text-center">
                 <p className="text-xs text-muted-foreground mb-1">Money</p>
-                <p className="font-mono text-sm">{opportunity.moneyPercentage?.toFixed(0)}%</p>
+                <div className="relative h-2 rounded-full bg-muted overflow-hidden">
+                  <div 
+                    className={cn(
+                      "absolute left-0 top-0 h-full rounded-full",
+                      opportunity.moneyPercentage && opportunity.ticketPercentage && 
+                      Math.abs((opportunity.moneyPercentage || 0) - (opportunity.ticketPercentage || 0)) > 10
+                        ? "bg-green-500/70"
+                        : "bg-orange-500/70"
+                    )}
+                    style={{ width: `${opportunity.moneyPercentage || 0}%` }}
+                  />
+                </div>
+                <p className="font-mono text-xs mt-1">{opportunity.moneyPercentage?.toFixed(0)}%</p>
               </div>
             </div>
           </>

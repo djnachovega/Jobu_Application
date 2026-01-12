@@ -145,7 +145,6 @@ export async function analyzeGameForRlm(gameId: number): Promise<InsertRlmSignal
 }
 
 export async function processAllGamesForRlm(): Promise<number> {
-  // Get all scheduled games for today
   const games = await storage.getGamesToday();
   let signalCount = 0;
   
@@ -159,6 +158,55 @@ export async function processAllGamesForRlm(): Promise<number> {
   }
   
   return signalCount;
+}
+
+export function detectSimpleRlm(
+  lineMovements: LineMovement[],
+  bettingPcts: BettingPercentage[],
+  marketType: string
+): { isRlm: boolean; sharpSide: string | null; strength: string } {
+  const movements = lineMovements
+    .filter(m => m.marketType === marketType)
+    .sort((a, b) => new Date(a.capturedAt).getTime() - new Date(b.capturedAt).getTime());
+  
+  if (movements.length === 0) {
+    return { isRlm: false, sharpSide: null, strength: "none" };
+  }
+  
+  const firstMovement = movements[0];
+  const lastMovement = movements[movements.length - 1];
+  const netMovement = lastMovement.currentValue - firstMovement.previousValue;
+  const movementSize = Math.abs(netMovement);
+  const direction = netMovement > 0 ? "up" : "down";
+  
+  const pcts = bettingPcts.filter(p => p.marketType === marketType);
+  if (pcts.length === 0) {
+    if (movementSize >= 1.0) {
+      return { 
+        isRlm: true, 
+        sharpSide: direction === "down" ? "home" : "away",
+        strength: movementSize >= 2.0 ? "strong" : "moderate"
+      };
+    }
+    return { isRlm: false, sharpSide: null, strength: "none" };
+  }
+  
+  const latestPct = pcts.sort((a, b) => 
+    new Date(b.capturedAt).getTime() - new Date(a.capturedAt).getTime()
+  )[0];
+  
+  const publicOnAway = latestPct.ticketPercentage > 55;
+  const lineMovingTowardsHome = direction === "down";
+  
+  if (publicOnAway && !lineMovingTowardsHome && movementSize >= 0.5) {
+    return { isRlm: true, sharpSide: "away", strength: movementSize >= 1.5 ? "strong" : "moderate" };
+  }
+  
+  if (!publicOnAway && lineMovingTowardsHome && movementSize >= 0.5) {
+    return { isRlm: true, sharpSide: "home", strength: movementSize >= 1.5 ? "strong" : "moderate" };
+  }
+  
+  return { isRlm: false, sharpSide: null, strength: "none" };
 }
 
 // Handle split analysis - ticket % vs money %

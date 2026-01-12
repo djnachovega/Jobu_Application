@@ -242,7 +242,7 @@ export async function registerRoutes(
       res.json({ message: "Refresh started" });
       
       // Run the scraper in background
-      const validScrapers: ScraperName[] = ["teamrankings", "covers", "schedules", "nba", "nfl", "cfb", "cbb"];
+      const validScrapers: ScraperName[] = ["teamrankings", "covers", "covers_percentages", "schedules", "nba", "nfl", "cfb", "cbb"];
       if (validScrapers.includes(name as ScraperName)) {
         try {
           const result = await runScraper(name as ScraperName);

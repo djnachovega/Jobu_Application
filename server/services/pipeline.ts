@@ -2,8 +2,30 @@ import { storage } from "../storage";
 import { runScraper } from "./scrapers";
 import { generateProjection } from "./jobu-algorithm";
 import { db } from "../db";
-import { games, teamStats, projections, opportunities, type Game, type TeamStats } from "@shared/schema";
-import { eq, and, gte, lte, or, ilike } from "drizzle-orm";
+import { games, teamStats, projections, opportunities, odds, type Game, type TeamStats, type Odds } from "@shared/schema";
+import { eq, and, gte, lte, or, ilike, desc } from "drizzle-orm";
+
+function calculateEdgePercentage(marketLine: number, fairLine: number, marketType: "spread" | "total"): number {
+  const diff = Math.abs(marketLine - fairLine);
+  const baseValue = marketType === "spread" ? Math.max(Math.abs(marketLine), 3) : Math.max(marketLine, 200);
+  return (diff / baseValue) * 100;
+}
+
+function determineSpreadSide(marketSpread: number, fairSpread: number): { side: "home" | "away"; edge: number } {
+  const diff = fairSpread - marketSpread;
+  if (diff > 0) {
+    return { side: "home", edge: diff };
+  }
+  return { side: "away", edge: -diff };
+}
+
+function determineTotalSide(marketTotal: number, fairTotal: number): { side: "over" | "under"; edge: number } {
+  const diff = marketTotal - fairTotal;
+  if (diff > 0.5) {
+    return { side: "under", edge: diff };
+  }
+  return { side: "over", edge: -diff };
+}
 
 interface PipelineResult {
   gamesScraped: number;
@@ -89,6 +111,18 @@ export async function runFullPipeline(
   }
   
   try {
+    console.log("Step 1b: Scraping Covers odds...");
+    const coversResult = await runScraper("covers", sports);
+    console.log(`Scraped odds for ${coversResult.recordsProcessed} games from Covers`);
+    
+    if (!coversResult.success && coversResult.error) {
+      result.errors.push(`Covers scrape: ${coversResult.error}`);
+    }
+  } catch (error) {
+    result.errors.push(`Covers error: ${error instanceof Error ? error.message : "Unknown"}`);
+  }
+  
+  try {
     console.log("Step 2: Getting today's games (Eastern timezone)...");
     // Use Eastern timezone (EST = UTC-5) for sports
     const now = new Date();
@@ -162,35 +196,102 @@ export async function runFullPipeline(
         result.projectionsGenerated++;
         
         console.log("Step 4: Creating opportunities...");
-        const edge = Math.random() * 5 + 1;
-        const confidence = edge > 4 ? "High" : edge > 2.5 ? "Medium" : "Lean";
         
-        if (edge > 1.5) {
-          const side = projection.projectedMargin > 0 ? "home" : "away";
-          const teamName = side === "home" ? game.homeTeamName : game.awayTeamName;
+        const [latestOdds] = await db.select().from(odds)
+          .where(eq(odds.gameId, game.id))
+          .orderBy(desc(odds.capturedAt))
+          .limit(1);
+        
+        const marketSpread = latestOdds?.spreadHome ? parseFloat(String(latestOdds.spreadHome)) : 
+                            latestOdds?.spreadAway ? -parseFloat(String(latestOdds.spreadAway)) : null;
+        const marketTotal = latestOdds?.totalOver ? parseFloat(String(latestOdds.totalOver)) : null;
+        
+        if (marketSpread !== null) {
+          const spreadResult = determineSpreadSide(marketSpread, projection.fairSpread);
+          const edgePct = calculateEdgePercentage(marketSpread, projection.fairSpread, "spread");
+          const confidence = edgePct > 4 ? "High" : edgePct > 2.5 ? "Medium" : "Lean";
           
-          await db.insert(opportunities).values({
-            gameId: game.id,
-            projectionId: savedProjection.id,
-            sport: game.sport,
-            marketType: "spread",
-            side,
-            playDescription: `${teamName} ${projection.fairSpread > 0 ? "+" : ""}${projection.fairSpread}`,
-            currentLine: projection.fairSpread,
-            currentOdds: -110,
-            fairLine: projection.fairSpread,
-            edgePercentage: edge,
-            confidence,
-            volatilityScore: projection.volatilityScore,
-            isReverseLineMovement: false,
-            drivers: projection.drivers,
-            status: "active",
-          });
+          if (edgePct > 1) {
+            const teamName = spreadResult.side === "home" ? game.homeTeamName : game.awayTeamName;
+            const displayLine = spreadResult.side === "home" ? marketSpread : -marketSpread;
+            
+            await db.insert(opportunities).values({
+              gameId: game.id,
+              projectionId: savedProjection.id,
+              sport: game.sport,
+              marketType: "spread",
+              side: spreadResult.side,
+              playDescription: `${teamName} ${displayLine > 0 ? "+" : ""}${displayLine}`,
+              currentLine: displayLine,
+              currentOdds: latestOdds?.spreadHomeOdds || -110,
+              fairLine: projection.fairSpread,
+              edgePercentage: edgePct,
+              confidence,
+              volatilityScore: projection.volatilityScore,
+              isReverseLineMovement: false,
+              drivers: projection.drivers,
+              status: "active",
+            });
+            
+            result.opportunitiesCreated++;
+          }
+        } else {
+          const edge = Math.random() * 5 + 1;
+          const confidence = edge > 4 ? "High" : edge > 2.5 ? "Medium" : "Lean";
           
-          result.opportunitiesCreated++;
+          if (edge > 1.5) {
+            const side = projection.projectedMargin > 0 ? "home" : "away";
+            const teamName = side === "home" ? game.homeTeamName : game.awayTeamName;
+            
+            await db.insert(opportunities).values({
+              gameId: game.id,
+              projectionId: savedProjection.id,
+              sport: game.sport,
+              marketType: "spread",
+              side,
+              playDescription: `${teamName} ${projection.fairSpread > 0 ? "+" : ""}${projection.fairSpread}`,
+              currentLine: projection.fairSpread,
+              currentOdds: -110,
+              fairLine: projection.fairSpread,
+              edgePercentage: edge,
+              confidence,
+              volatilityScore: projection.volatilityScore,
+              isReverseLineMovement: false,
+              drivers: projection.drivers,
+              status: "active",
+            });
+            
+            result.opportunitiesCreated++;
+          }
         }
         
-        if (Math.random() > 0.5) {
+        if (marketTotal !== null) {
+          const totalResult = determineTotalSide(marketTotal, projection.fairTotal);
+          const edgePct = calculateEdgePercentage(marketTotal, projection.fairTotal, "total");
+          const confidence = edgePct > 3 ? "Medium" : "Lean";
+          
+          if (edgePct > 0.5) {
+            await db.insert(opportunities).values({
+              gameId: game.id,
+              projectionId: savedProjection.id,
+              sport: game.sport,
+              marketType: "total",
+              side: totalResult.side,
+              playDescription: `${totalResult.side.charAt(0).toUpperCase() + totalResult.side.slice(1)} ${marketTotal}`,
+              currentLine: marketTotal,
+              currentOdds: latestOdds?.totalOverOdds || -110,
+              fairLine: projection.fairTotal,
+              edgePercentage: edgePct,
+              confidence,
+              volatilityScore: projection.volatilityScore,
+              isReverseLineMovement: false,
+              drivers: [`Projected total: ${projection.projectedTotal}`],
+              status: "active",
+            });
+            
+            result.opportunitiesCreated++;
+          }
+        } else if (Math.random() > 0.5) {
           const totalEdge = Math.random() * 4 + 0.5;
           const totalSide = projection.projectedTotal > 220 ? "over" : "under";
           

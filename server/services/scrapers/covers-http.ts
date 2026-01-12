@@ -290,9 +290,119 @@ export async function scrapeCoversOdds(sports?: string[]): Promise<CoversScraper
   }
 }
 
+async function scrapeMatchupPercentages(
+  client: ReturnType<typeof createHttpClient>["client"],
+  matchupUrl: string,
+  awayTeam: string,
+  homeTeam: string,
+  sport: string
+): Promise<CoversBettingPercentages | null> {
+  try {
+    const fullUrl = matchupUrl.startsWith("http") ? matchupUrl : `https://www.covers.com${matchupUrl}`;
+    const response = await client.get(fullUrl);
+    const $ = parseHtml(response.data);
+    
+    let spreadAwayTicketPct: number | null = null;
+    let spreadHomeTicketPct: number | null = null;
+    let spreadAwayMoneyPct: number | null = null;
+    let spreadHomeMoneyPct: number | null = null;
+    let totalOverTicketPct: number | null = null;
+    let totalUnderTicketPct: number | null = null;
+    let totalOverMoneyPct: number | null = null;
+    let totalUnderMoneyPct: number | null = null;
+
+    const pageText = $("body").text();
+    
+    const spreadSection = pageText.match(/Spread.*?(\d{1,3})%.*?(\d{1,3})%/is);
+    if (spreadSection) {
+      spreadAwayTicketPct = parseInt(spreadSection[1]);
+      spreadHomeTicketPct = parseInt(spreadSection[2]);
+    }
+    
+    const totalSection = pageText.match(/Total.*?Over.*?(\d{1,3})%.*?Under.*?(\d{1,3})%/is);
+    if (totalSection) {
+      totalOverTicketPct = parseInt(totalSection[1]);
+      totalUnderTicketPct = parseInt(totalSection[2]);
+    }
+
+    $("div, section").each((_, el) => {
+      const text = $(el).text();
+      
+      const spreadMatch = text.match(/(?:Spread|ATS).*?(\d{1,3})%.*?(\d{1,3})%/is);
+      if (spreadMatch && !spreadAwayTicketPct) {
+        spreadAwayTicketPct = parseInt(spreadMatch[1]);
+        spreadHomeTicketPct = parseInt(spreadMatch[2]);
+      }
+      
+      const totalMatch = text.match(/(?:Total|O\/U).*?(\d{1,3})%.*?(\d{1,3})%/is);
+      if (totalMatch && !totalOverTicketPct) {
+        totalOverTicketPct = parseInt(totalMatch[1]);
+        totalUnderTicketPct = parseInt(totalMatch[2]);
+      }
+      
+      const moneyMatch = text.match(/Money.*?(\d{1,3})%.*?(\d{1,3})%/is);
+      if (moneyMatch) {
+        spreadAwayMoneyPct = parseInt(moneyMatch[1]);
+        spreadHomeMoneyPct = parseInt(moneyMatch[2]);
+      }
+    });
+
+    if (spreadAwayTicketPct || totalOverTicketPct) {
+      return {
+        awayTeam,
+        homeTeam,
+        sport,
+        spreadAwayTicketPct,
+        spreadHomeTicketPct,
+        spreadAwayMoneyPct,
+        spreadHomeMoneyPct,
+        totalOverTicketPct,
+        totalUnderTicketPct,
+        totalOverMoneyPct,
+        totalUnderMoneyPct,
+      };
+    }
+    
+    return null;
+  } catch (error) {
+    console.error(`Error scraping matchup percentages:`, error instanceof Error ? error.message : error);
+    return null;
+  }
+}
+
 export async function scrapeCoversConsensus(sports?: string[]): Promise<{ success: boolean; percentages: CoversBettingPercentages[]; error?: string }> {
-  return {
-    success: true,
-    percentages: [],
-  };
+  const { client } = createHttpClient();
+  const percentages: CoversBettingPercentages[] = [];
+  const sportsToScrape = sports || ["NFL", "NBA"];
+  
+  try {
+    const oddsResult = await scrapeCoversOdds(sportsToScrape);
+    if (!oddsResult.success) {
+      return { success: false, percentages: [], error: oddsResult.error };
+    }
+    
+    const gamesWithUrls = oddsResult.odds.filter(o => o.matchupUrl);
+    const limitedGames = gamesWithUrls.slice(0, 10);
+    
+    for (const game of limitedGames) {
+      if (!game.matchupUrl) continue;
+      
+      const pct = await scrapeMatchupPercentages(client, game.matchupUrl, game.awayTeam, game.homeTeam, game.sport);
+      if (pct) {
+        percentages.push(pct);
+      }
+      
+      await delay(1500);
+    }
+    
+    console.log(`Scraped betting percentages for ${percentages.length} games`);
+    return { success: true, percentages };
+  } catch (error) {
+    console.error("Covers consensus scraper error:", error);
+    return {
+      success: false,
+      percentages: [],
+      error: error instanceof Error ? error.message : "Unknown error",
+    };
+  }
 }

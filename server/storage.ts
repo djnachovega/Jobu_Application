@@ -276,14 +276,81 @@ export class DatabaseStorage implements IStorage {
     const awayNorm = normalizeTeam(awayTeamName);
     const homeNorm = normalizeTeam(homeTeamName);
 
-    for (const game of allGames) {
-      const gameAwayNorm = normalizeTeam(game.awayTeamName);
-      const gameHomeNorm = normalizeTeam(game.homeTeamName);
+    // Helper: extract words for fuzzy matching (keep all words, no length filter)
+    const getKeywords = (name: string): string[] => {
+      return name.toLowerCase()
+        .replace(/[^a-z\s]/g, "")
+        .split(/\s+/)
+        .filter(w => w.length >= 2)
+        .filter(w => !["the", "and"].includes(w));
+    };
+
+    // Helper: check if teams match using multiple strategies
+    const teamsMatch = (coversName: string, espnName: string): boolean => {
+      const coversNorm = normalizeTeam(coversName);
+      const espnNorm = normalizeTeam(espnName);
       
-      if (gameAwayNorm.includes(awayNorm) || awayNorm.includes(gameAwayNorm)) {
-        if (gameHomeNorm.includes(homeNorm) || homeNorm.includes(gameHomeNorm)) {
-          return game;
+      // Strategy 1: substring match (works for most cases)
+      if (espnNorm.includes(coversNorm) || coversNorm.includes(espnNorm)) {
+        return true;
+      }
+      
+      // Strategy 2: abbreviation expansion (NC = North Carolina, UTRGV = UT Rio Grande Valley)
+      const coversWords = getKeywords(coversName);
+      const espnWords = getKeywords(espnName);
+      
+      // Check if mascot (last word) matches
+      const coversMascot = coversWords[coversWords.length - 1];
+      const espnMascot = espnWords[espnWords.length - 1];
+      const mascotMatch = coversMascot && espnMascot && 
+        (coversMascot === espnMascot || 
+         espnMascot.includes(coversMascot) || 
+         coversMascot.includes(espnMascot));
+      
+      if (mascotMatch) {
+        // If mascot matches, also check if school name partially matches
+        // Handle abbreviations like "NC" matching "north carolina"
+        const coversSchool = coversWords.slice(0, -1).join("");
+        const espnSchool = espnWords.slice(0, -1).join("");
+        
+        // Direct substring on school
+        if (espnSchool.includes(coversSchool) || coversSchool.includes(espnSchool)) {
+          return true;
         }
+        
+        // Check if any cover word appears in any espn word (or vice versa)
+        const hasSchoolOverlap = coversWords.slice(0, -1).some(cw => 
+          espnWords.slice(0, -1).some(ew => 
+            (cw.length >= 3 && ew.includes(cw)) || 
+            (ew.length >= 3 && cw.includes(ew)) ||
+            cw === ew
+          )
+        );
+        if (hasSchoolOverlap) return true;
+        
+        // Abbreviation check: "nc" should match first letters of "north carolina"
+        if (coversSchool.length <= 4 && coversSchool.length >= 2) {
+          // Check if it's an abbreviation of espn school name
+          const initials = espnWords.slice(0, -1).map(w => w[0]).join("");
+          if (initials.startsWith(coversSchool) || coversSchool === initials) {
+            return true;
+          }
+        }
+      }
+      
+      // Strategy 3: single strong keyword match (unique mascots or unique school names)
+      const uniqueMatch = coversWords.some(cw => 
+        cw.length >= 5 && espnWords.some(ew => ew.length >= 5 && cw === ew)
+      );
+      if (uniqueMatch) return true;
+      
+      return false;
+    };
+
+    for (const game of allGames) {
+      if (teamsMatch(awayTeamName, game.awayTeamName) && 
+          teamsMatch(homeTeamName, game.homeTeamName)) {
+        return game;
       }
     }
 

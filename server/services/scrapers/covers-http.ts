@@ -84,7 +84,26 @@ function expandTeamName(abbrev: string, sport: string): string {
     return NBA_TEAMS[cleaned];
   }
   
+  // For college sports (CFB/CBB), return the original text as-is
+  // College teams often appear as full names or partial names on Covers
   return abbrev;
+}
+
+// Check if a team name appears valid (not just random text)
+function isValidTeamName(name: string, sport: string): boolean {
+  if (!name || name.length < 2) return false;
+  
+  // For pro sports, we require the team to be in our lookup
+  if (sport === "NFL") return !!NFL_TEAMS[name.toUpperCase()];
+  if (sport === "NBA") return !!NBA_TEAMS[name.toUpperCase()];
+  
+  // For college sports, accept any reasonable-looking name
+  // College team names/abbrevs are 2-15 chars, letters only or with spaces
+  if (sport === "CFB" || sport === "CBB") {
+    return name.length >= 2 && name.length <= 20;
+  }
+  
+  return false;
 }
 
 function parseSpreadFromCell(text: string): { spread: number | null; odds: number | null } {
@@ -165,17 +184,36 @@ async function scrapeOddsForSport(
       const strongTags = $row.find("strong").toArray();
       if (strongTags.length < 2) return;
       
-      const awayAbbrev = $(strongTags[0]).text().trim().replace(/[^A-Z]/gi, "").toUpperCase();
-      const homeAbbrev = $(strongTags[1]).text().trim().replace(/[^A-Z]/gi, "").toUpperCase();
+      // For college sports, get raw text; for pro sports, get abbreviation
+      let awayAbbrev: string;
+      let homeAbbrev: string;
+      
+      if (sport === "CFB" || sport === "CBB") {
+        // For college, try to get fuller team names
+        awayAbbrev = $(strongTags[0]).text().trim();
+        homeAbbrev = $(strongTags[1]).text().trim();
+      } else {
+        // For pro sports, extract abbreviations
+        awayAbbrev = $(strongTags[0]).text().trim().replace(/[^A-Z]/gi, "").toUpperCase();
+        homeAbbrev = $(strongTags[1]).text().trim().replace(/[^A-Z]/gi, "").toUpperCase();
+      }
       
       if (!awayAbbrev || !homeAbbrev) return;
       if (awayAbbrev.length < 2 || homeAbbrev.length < 2) return;
-      if (awayAbbrev.length > 4 || homeAbbrev.length > 4) return;
+      
+      // For pro sports, abbreviations should be 2-4 chars
+      if (sport !== "CFB" && sport !== "CBB") {
+        if (awayAbbrev.length > 4 || homeAbbrev.length > 4) return;
+      }
       
       const awayTeam = expandTeamName(awayAbbrev, sport);
       const homeTeam = expandTeamName(homeAbbrev, sport);
       
-      if (awayTeam === awayAbbrev && homeTeam === homeAbbrev) return;
+      // Validate team names - for pro sports require at least one valid team
+      // For college sports, names are already validated by length check above
+      if (sport === "NFL" || sport === "NBA") {
+        if (!isValidTeamName(awayAbbrev, sport) || !isValidTeamName(homeAbbrev, sport)) return;
+      }
       
       let spreadHome: number | null = null;
       let spreadAway: number | null = null;

@@ -170,14 +170,24 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getGamesToday(sports?: string[]): Promise<Game[]> {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
+    // Use Eastern timezone for sports (US-centric)
+    const now = new Date();
+    const easternOffset = -5 * 60; // EST is UTC-5 (simplified, doesn't account for DST)
+    const localOffset = now.getTimezoneOffset();
+    const easternNow = new Date(now.getTime() + (localOffset - easternOffset) * 60 * 1000);
+    
+    // Get today in Eastern time
+    const todayEastern = new Date(easternNow);
+    todayEastern.setHours(0, 0, 0, 0);
+    
+    // Convert back to UTC for database query
+    const todayStart = new Date(todayEastern.getTime() - (localOffset - easternOffset) * 60 * 1000);
+    const tomorrowStart = new Date(todayStart);
+    tomorrowStart.setDate(tomorrowStart.getDate() + 1);
 
     let conditions = and(
-      gte(games.gameDate, today),
-      lte(games.gameDate, tomorrow)
+      gte(games.gameDate, todayStart),
+      lte(games.gameDate, tomorrowStart)
     );
 
     if (sports && sports.length > 0) {

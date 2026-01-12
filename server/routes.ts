@@ -103,10 +103,34 @@ export async function registerRoutes(
   // Opportunities
   app.get("/api/opportunities", async (req: Request, res: Response) => {
     try {
+      const gameId = req.query.gameId ? parseInt(req.query.gameId as string) : undefined;
       const sports = req.query.sports ? (req.query.sports as string).split(",") : undefined;
       const confidence = req.query.confidence as string | undefined;
-      const opportunities = await storage.getOpportunities({ sports, confidence });
-      res.json(opportunities);
+      let opportunities = await storage.getOpportunities({ sports, confidence });
+      
+      // Filter by gameId if provided
+      if (gameId) {
+        opportunities = opportunities.filter(o => o.gameId === gameId);
+      }
+      
+      // Attach game data to each opportunity
+      const oppsWithGames = await Promise.all(opportunities.map(async (opp) => {
+        const game = await storage.getGameById(opp.gameId);
+        return {
+          ...opp,
+          game: game ? {
+            id: game.id,
+            sport: game.sport,
+            awayTeamName: game.awayTeamName,
+            homeTeamName: game.homeTeamName,
+            gameDate: game.gameDate,
+            venue: game.venue,
+            status: game.status
+          } : null
+        };
+      }));
+      
+      res.json(oppsWithGames);
     } catch (error) {
       console.error("Error fetching opportunities:", error);
       res.status(500).json({ error: "Failed to fetch opportunities" });

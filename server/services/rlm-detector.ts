@@ -209,6 +209,86 @@ export function detectSimpleRlm(
   return { isRlm: false, sharpSide: null, strength: "none" };
 }
 
+// Simple RLM detection using opening vs current line
+// This is the preferred method when we have opening and current lines from Covers
+export function detectRlmFromLines(
+  openingLine: number | null,
+  currentLine: number | null,
+  ticketPct: number | null,
+  marketType: "spread" | "total"
+): { isRlm: boolean; strength: string; direction: string } {
+  if (openingLine === null || currentLine === null) {
+    return { isRlm: false, strength: "none", direction: "none" };
+  }
+  
+  const lineMovement = currentLine - openingLine;
+  const movementSize = Math.abs(lineMovement);
+  
+  // Need at least 0.5 point movement
+  if (movementSize < 0.5) {
+    return { isRlm: false, strength: "none", direction: "none" };
+  }
+  
+  const direction = lineMovement > 0 ? "up" : "down";
+  
+  // If we have ticket percentages, check for RLM
+  if (ticketPct !== null) {
+    const publicOnFavorite = ticketPct > 55; // Public betting favorite/over
+    
+    if (marketType === "spread") {
+      // For spreads: line going up = moving towards underdog
+      // RLM = public on favorite but line moving towards underdog
+      const lineMovingToUnderdog = direction === "up";
+      
+      if (publicOnFavorite && lineMovingToUnderdog && movementSize >= 0.5) {
+        return { 
+          isRlm: true, 
+          strength: movementSize >= 1.5 ? "strong" : movementSize >= 1.0 ? "moderate" : "weak",
+          direction 
+        };
+      }
+      // RLM = public on underdog but line moving towards favorite
+      if (!publicOnFavorite && !lineMovingToUnderdog && movementSize >= 0.5) {
+        return { 
+          isRlm: true, 
+          strength: movementSize >= 1.5 ? "strong" : movementSize >= 1.0 ? "moderate" : "weak",
+          direction 
+        };
+      }
+    } else {
+      // For totals: RLM = public on over but line moving down (or vice versa)
+      const publicOnOver = ticketPct > 55;
+      const lineMovingDown = direction === "down";
+      
+      if (publicOnOver && lineMovingDown && movementSize >= 0.5) {
+        return { 
+          isRlm: true, 
+          strength: movementSize >= 2.0 ? "strong" : movementSize >= 1.0 ? "moderate" : "weak",
+          direction 
+        };
+      }
+      if (!publicOnOver && !lineMovingDown && movementSize >= 0.5) {
+        return { 
+          isRlm: true, 
+          strength: movementSize >= 2.0 ? "strong" : movementSize >= 1.0 ? "moderate" : "weak",
+          direction 
+        };
+      }
+    }
+  } else {
+    // Without ticket percentages, flag significant movement as potential RLM
+    if (movementSize >= 1.0) {
+      return { 
+        isRlm: true, 
+        strength: movementSize >= 2.0 ? "strong" : "moderate",
+        direction 
+      };
+    }
+  }
+  
+  return { isRlm: false, strength: "none", direction };
+}
+
 // Handle split analysis - ticket % vs money %
 export function analyzeHandleSplit(
   ticketPct: number,

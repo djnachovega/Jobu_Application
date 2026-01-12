@@ -1,6 +1,7 @@
 import { storage } from "../storage";
 import { runScraper } from "./scrapers";
 import { generateProjection } from "./jobu-algorithm";
+import { detectRlmFromLines } from "./rlm-detector";
 import { db } from "../db";
 import { games, teamStats, projections, opportunities, odds, type Game, type TeamStats, type Odds } from "@shared/schema";
 import { eq, and, gte, lte, or, ilike, desc } from "drizzle-orm";
@@ -63,15 +64,112 @@ interface PipelineResult {
   errors: string[];
 }
 
+// Team name aliases for better matching
+const TEAM_ALIASES: Record<string, string[]> = {
+  // NBA
+  "Los Angeles Lakers": ["LA Lakers", "Lakers", "LAL"],
+  "Los Angeles Clippers": ["LA Clippers", "Clippers", "LAC"],
+  "Golden State Warriors": ["Warriors", "GSW", "Golden State"],
+  "New York Knicks": ["Knicks", "NY Knicks", "NYK"],
+  "Brooklyn Nets": ["Nets", "BKN"],
+  "Boston Celtics": ["Celtics", "BOS"],
+  "Miami Heat": ["Heat", "MIA"],
+  "Philadelphia 76ers": ["76ers", "Sixers", "PHI", "Philadelphia"],
+  "Milwaukee Bucks": ["Bucks", "MIL"],
+  "Denver Nuggets": ["Nuggets", "DEN"],
+  "Phoenix Suns": ["Suns", "PHX"],
+  "Dallas Mavericks": ["Mavericks", "Mavs", "DAL"],
+  "Oklahoma City Thunder": ["Thunder", "OKC"],
+  "Minnesota Timberwolves": ["Timberwolves", "Wolves", "MIN"],
+  "Cleveland Cavaliers": ["Cavaliers", "Cavs", "CLE"],
+  "Sacramento Kings": ["Kings", "SAC"],
+  "New Orleans Pelicans": ["Pelicans", "NO", "NOP"],
+  "Indiana Pacers": ["Pacers", "IND"],
+  "Orlando Magic": ["Magic", "ORL"],
+  "Houston Rockets": ["Rockets", "HOU"],
+  "Chicago Bulls": ["Bulls", "CHI"],
+  "Atlanta Hawks": ["Hawks", "ATL"],
+  "Memphis Grizzlies": ["Grizzlies", "MEM"],
+  "Utah Jazz": ["Jazz", "UTA"],
+  "Toronto Raptors": ["Raptors", "TOR"],
+  "Portland Trail Blazers": ["Trail Blazers", "Blazers", "POR"],
+  "San Antonio Spurs": ["Spurs", "SA", "SAS"],
+  "Charlotte Hornets": ["Hornets", "CHA"],
+  "Detroit Pistons": ["Pistons", "DET"],
+  "Washington Wizards": ["Wizards", "WAS"],
+  // NFL
+  "New England Patriots": ["Patriots", "NE", "Pats"],
+  "Kansas City Chiefs": ["Chiefs", "KC"],
+  "Buffalo Bills": ["Bills", "BUF"],
+  "San Francisco 49ers": ["49ers", "Niners", "SF"],
+  "Dallas Cowboys": ["Cowboys", "DAL"],
+  "Philadelphia Eagles": ["Eagles", "PHI"],
+  "Green Bay Packers": ["Packers", "GB"],
+  "Seattle Seahawks": ["Seahawks", "SEA"],
+  "Baltimore Ravens": ["Ravens", "BAL"],
+  "Pittsburgh Steelers": ["Steelers", "PIT"],
+  "Cincinnati Bengals": ["Bengals", "CIN"],
+  "Cleveland Browns": ["Browns", "CLE"],
+  "Los Angeles Rams": ["Rams", "LA Rams", "LAR"],
+  "Los Angeles Chargers": ["Chargers", "LA Chargers", "LAC"],
+  "Las Vegas Raiders": ["Raiders", "LV", "LVR"],
+  "Denver Broncos": ["Broncos", "DEN"],
+  "Miami Dolphins": ["Dolphins", "MIA"],
+  "New York Jets": ["Jets", "NYJ"],
+  "New York Giants": ["Giants", "NYG"],
+  "Minnesota Vikings": ["Vikings", "MIN"],
+  "Chicago Bears": ["Bears", "CHI"],
+  "Detroit Lions": ["Lions", "DET"],
+  "Tampa Bay Buccaneers": ["Buccaneers", "Bucs", "TB"],
+  "New Orleans Saints": ["Saints", "NO"],
+  "Atlanta Falcons": ["Falcons", "ATL"],
+  "Carolina Panthers": ["Panthers", "CAR"],
+  "Arizona Cardinals": ["Cardinals", "ARI"],
+  "Houston Texans": ["Texans", "HOU"],
+  "Indianapolis Colts": ["Colts", "IND"],
+  "Jacksonville Jaguars": ["Jaguars", "Jags", "JAX"],
+  "Tennessee Titans": ["Titans", "TEN"],
+  "Washington Commanders": ["Commanders", "WAS"],
+};
+
+// Normalize team name for matching
+function normalizeTeamName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+// Get all possible names for a team
+function getTeamNameVariants(teamName: string): string[] {
+  const variants = [teamName];
+  
+  // Check if this name is in aliases
+  for (const [canonical, aliases] of Object.entries(TEAM_ALIASES)) {
+    if (normalizeTeamName(canonical) === normalizeTeamName(teamName) ||
+        aliases.some(a => normalizeTeamName(a) === normalizeTeamName(teamName))) {
+      variants.push(canonical, ...aliases);
+      break;
+    }
+  }
+  
+  // Also add the last word (nickname)
+  const lastWord = teamName.split(" ").pop() || "";
+  if (lastWord && !variants.includes(lastWord)) {
+    variants.push(lastWord);
+  }
+  
+  return [...new Set(variants)];
+}
+
 async function findTeamStats(teamName: string, sport: string, splitType: string): Promise<TeamStats | null> {
+  const variants = getTeamNameVariants(teamName);
+  
+  // Build OR conditions for all variants
+  const conditions = variants.map(v => ilike(teamStats.teamName, `%${v}%`));
+  
   const stats = await db
     .select()
     .from(teamStats)
     .where(and(
-      or(
-        ilike(teamStats.teamName, teamName),
-        ilike(teamStats.teamName, `%${teamName.split(" ").pop()}%`)
-      ),
+      or(...conditions),
       eq(teamStats.sport, sport),
       eq(teamStats.splitType, splitType)
     ))
@@ -226,20 +324,37 @@ export async function runFullPipeline(
         
         console.log("Step 4: Creating opportunities...");
         
+        // Get latest odds (current lines)
         const [latestOdds] = await db.select().from(odds)
           .where(eq(odds.gameId, game.id))
           .orderBy(desc(odds.capturedAt))
           .limit(1);
         
+        // Get opening odds (earliest record or one marked as opening)
+        const allOddsForGame = await db.select().from(odds)
+          .where(eq(odds.gameId, game.id))
+          .orderBy(odds.capturedAt);
+        
+        // First try to find explicit opening odds, otherwise use earliest record
+        const openingOdds = allOddsForGame.find(o => o.isOpening) || allOddsForGame[0] || null;
+        
         const marketSpread = latestOdds?.spreadHome ? parseFloat(String(latestOdds.spreadHome)) : 
                             latestOdds?.spreadAway ? -parseFloat(String(latestOdds.spreadAway)) : null;
         const marketTotal = latestOdds?.totalOver ? parseFloat(String(latestOdds.totalOver)) : null;
+        
+        // Get opening lines for RLM detection
+        const openingSpread = openingOdds?.spreadHome ? parseFloat(String(openingOdds.spreadHome)) : 
+                              openingOdds?.spreadAway ? -parseFloat(String(openingOdds.spreadAway)) : null;
+        const openingTotal = openingOdds?.totalOver ? parseFloat(String(openingOdds.totalOver)) : null;
         
         if (marketSpread !== null) {
           const spreadResult = determineSpreadSide(marketSpread, projection.fairSpread);
           const spreadOdds = latestOdds?.spreadHomeOdds || -110;
           const edgePct = calculateEdgePercentage(marketSpread, projection.fairSpread, "spread", game.sport, spreadOdds);
           const confidence = edgePct > 4 ? "High" : edgePct > 2.5 ? "Medium" : "Lean";
+          
+          // Detect RLM using opening vs current line
+          const spreadRlm = detectRlmFromLines(openingSpread, marketSpread, null, "spread");
           
           if (edgePct > 1) {
             const teamName = spreadResult.side === "home" ? game.homeTeamName : game.awayTeamName;
@@ -258,8 +373,10 @@ export async function runFullPipeline(
               edgePercentage: edgePct,
               confidence,
               volatilityScore: projection.volatilityScore,
-              isReverseLineMovement: false,
-              drivers: projection.drivers,
+              isReverseLineMovement: spreadRlm.isRlm,
+              drivers: spreadRlm.isRlm 
+                ? [...projection.drivers, `RLM detected (${spreadRlm.strength}): line moved ${spreadRlm.direction}`]
+                : projection.drivers,
               status: "active",
             });
             
@@ -277,6 +394,9 @@ export async function runFullPipeline(
           const edgePct = calculateEdgePercentage(marketTotal, projection.fairTotal, "total", game.sport, totalOdds);
           const confidence = edgePct > 3 ? "Medium" : "Lean";
           
+          // Detect RLM using opening vs current total (openingTotal already fetched above)
+          const totalRlm = detectRlmFromLines(openingTotal, marketTotal, null, "total");
+          
           if (edgePct > 0.5) {
             await db.insert(opportunities).values({
               gameId: game.id,
@@ -291,8 +411,10 @@ export async function runFullPipeline(
               edgePercentage: edgePct,
               confidence,
               volatilityScore: projection.volatilityScore,
-              isReverseLineMovement: false,
-              drivers: [`Projected total: ${projection.projectedTotal}`],
+              isReverseLineMovement: totalRlm.isRlm,
+              drivers: totalRlm.isRlm 
+                ? [`Projected total: ${projection.projectedTotal}`, `RLM detected (${totalRlm.strength}): line moved ${totalRlm.direction}`]
+                : [`Projected total: ${projection.projectedTotal}`],
               status: "active",
             });
             
@@ -332,6 +454,20 @@ export async function importExcelAndProcess(buffer: Buffer, filename: string): P
     await storage.upsertTeamStats(stat);
     teamsImported.add(stat.teamName);
     statsImported++;
+  }
+  
+  // Auto-refresh projections after Excel upload
+  if (statsImported > 0) {
+    console.log("Excel import complete, triggering projection refresh...");
+    // Get unique sports from imported stats
+    const sports = [...new Set(result.stats.map(s => s.sport))];
+    for (const sport of sports) {
+      try {
+        await runPipeline(sport);
+      } catch (e) {
+        result.errors.push(`Auto-refresh for ${sport} failed: ${e instanceof Error ? e.message : "Unknown"}`);
+      }
+    }
   }
   
   return {

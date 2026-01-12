@@ -58,6 +58,14 @@ interface ProjectionResult {
   drivers: string[];
 }
 
+// Sport-specific default metrics when no stats available
+const DEFAULT_METRICS = {
+  NFL: { offEff: 21, defEff: 21, pace: 23 },      // ~21 PPG, 23 possessions
+  NBA: { offEff: 112, defEff: 112, pace: 100 },   // ~112 rating, 100 possessions = ~224 total
+  CFB: { offEff: 28, defEff: 28, pace: 70 },      // ~28 PPG, 70 plays
+  CBB: { offEff: 105, defEff: 105, pace: 68 },    // ~105 rating, 68 possessions = ~143 total
+};
+
 // Blend stats based on split type
 function blendTeamStats(
   homeStats: TeamStats | undefined,
@@ -67,11 +75,12 @@ function blendTeamStats(
   sport: string
 ): TeamMetrics {
   const weights = BLEND_WEIGHTS[sport as keyof typeof BLEND_WEIGHTS] || BLEND_WEIGHTS.NFL;
+  const defaults = DEFAULT_METRICS[sport as keyof typeof DEFAULT_METRICS] || DEFAULT_METRICS.NFL;
   
-  // Default metrics if no stats available
-  let offEff = 100;
-  let defEff = 100;
-  let pace = 68;
+  // Default metrics if no stats available - sport-specific
+  let offEff = defaults.offEff;
+  let defEff = defaults.defEff;
+  let pace = defaults.pace;
   let sos = 0;
   
   // Helper to get efficiency based on sport

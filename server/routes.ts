@@ -175,28 +175,26 @@ export async function registerRoutes(
 
   app.post("/api/backtest/run", async (req: Request, res: Response) => {
     try {
-      const { sport, signalType, dateFrom, dateTo } = req.body;
+      const { sport, signalType, dateFrom, dateTo, minEdge, minConfidence } = req.body;
       
-      // Placeholder backtest logic - will be implemented with actual algorithm
-      const result = await storage.createBacktestResult({
+      const { runBacktest, saveBacktestResult } = await import("./services/backtesting");
+      
+      const config = {
         sport: sport || "ALL",
-        signalType: signalType || "rlm",
-        dateRangeStart: dateFrom ? new Date(dateFrom) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
-        dateRangeEnd: dateTo ? new Date(dateTo) : new Date(),
-        totalSignals: 0,
-        wins: 0,
-        losses: 0,
-        pushes: 0,
-        winPercentage: 0,
-        roi: null,
-        averageEdge: null,
-        highConfidenceRecord: null,
-        mediumConfidenceRecord: null,
-        leanConfidenceRecord: null,
-        parameters: { sport, signalType, dateFrom, dateTo },
-      });
+        signalType: signalType || "all",
+        dateFrom: dateFrom ? new Date(dateFrom) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+        dateTo: dateTo ? new Date(dateTo) : new Date(),
+        minEdge: minEdge || 0,
+        minConfidence: minConfidence || undefined,
+      };
       
-      res.json(result);
+      const summary = await runBacktest(config);
+      const result = await saveBacktestResult(config, summary);
+      
+      res.json({
+        ...result,
+        summary,
+      });
     } catch (error) {
       console.error("Error running backtest:", error);
       res.status(500).json({ error: "Failed to run backtest" });

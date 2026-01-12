@@ -60,6 +60,7 @@ export interface IStorage {
   createGame(game: InsertGame): Promise<Game>;
   updateGame(id: number, game: Partial<InsertGame>): Promise<Game | undefined>;
   findOrCreateGame(game: InsertGame): Promise<Game>;
+  findGameByTeams(awayTeamName: string, homeTeamName: string, sport: string): Promise<Game | undefined>;
 
   // Odds
   getOddsForGame(gameId: number): Promise<Odds[]>;
@@ -236,6 +237,57 @@ export class DatabaseStorage implements IStorage {
     }
 
     return this.createGame(game);
+  }
+
+  async findGameByTeams(awayTeamName: string, homeTeamName: string, sport: string): Promise<Game | undefined> {
+    const now = new Date();
+    const easternFormatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    });
+    const easternDateStr = easternFormatter.format(now);
+    const [month, day, year] = easternDateStr.split('/');
+    
+    const easternStart = new Date(`${year}-${month}-${day}T05:00:00.000Z`);
+    const easternEnd = new Date(easternStart.getTime() + 24 * 60 * 60 * 1000);
+
+    const [exactMatch] = await db.select().from(games)
+      .where(and(
+        eq(games.awayTeamName, awayTeamName),
+        eq(games.homeTeamName, homeTeamName),
+        eq(games.sport, sport),
+        gte(games.gameDate, easternStart),
+        lte(games.gameDate, easternEnd)
+      ))
+      .limit(1);
+
+    if (exactMatch) return exactMatch;
+
+    const allGames = await db.select().from(games)
+      .where(and(
+        eq(games.sport, sport),
+        gte(games.gameDate, easternStart),
+        lte(games.gameDate, easternEnd)
+      ));
+
+    const normalizeTeam = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const awayNorm = normalizeTeam(awayTeamName);
+    const homeNorm = normalizeTeam(homeTeamName);
+
+    for (const game of allGames) {
+      const gameAwayNorm = normalizeTeam(game.awayTeamName);
+      const gameHomeNorm = normalizeTeam(game.homeTeamName);
+      
+      if (gameAwayNorm.includes(awayNorm) || awayNorm.includes(gameAwayNorm)) {
+        if (gameHomeNorm.includes(homeNorm) || homeNorm.includes(gameHomeNorm)) {
+          return game;
+        }
+      }
+    }
+
+    return undefined;
   }
 
   // Odds

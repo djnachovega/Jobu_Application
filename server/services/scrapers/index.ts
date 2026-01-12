@@ -1,9 +1,10 @@
 import { storage } from "../../storage";
 import { scrapeTeamRankingsHttp } from "./teamrankings-http";
+import { scrapeCoversOdds } from "./covers-http";
 import { scrapeAllSchedules, scrapeNBASchedule, scrapeNFLSchedule, scrapeCFBSchedule, scrapeCBBSchedule } from "./league-schedules";
 import { getOrCreateTeam } from "../team-resolver";
 
-export type ScraperName = "teamrankings" | "schedules" | "nba" | "nfl" | "cfb" | "cbb";
+export type ScraperName = "teamrankings" | "covers" | "schedules" | "nba" | "nfl" | "cfb" | "cbb";
 
 export interface ScraperResult {
   success: boolean;
@@ -38,6 +39,69 @@ export async function runScraper(name: ScraperName, sports?: string[]): Promise<
         return {
           success: true,
           message: `Scraped ${processed} teams from TeamRankings`,
+          recordsProcessed: processed,
+        };
+      }
+
+      case "covers": {
+        const result = await scrapeCoversOdds(sports);
+        
+        if (!result.success) {
+          return {
+            success: false,
+            message: "Covers.com scrape failed",
+            recordsProcessed: 0,
+            error: result.error,
+          };
+        }
+        
+        let processed = 0;
+        for (const gameOdds of result.odds) {
+          const awayTeam = await getOrCreateTeam(gameOdds.awayTeam, gameOdds.sport);
+          const homeTeam = await getOrCreateTeam(gameOdds.homeTeam, gameOdds.sport);
+          
+          const game = await storage.findGameByTeams(
+            gameOdds.awayTeam,
+            gameOdds.homeTeam,
+            gameOdds.sport
+          );
+          
+          if (game) {
+            await storage.createOdds({
+              gameId: game.id,
+              sportsbook: "covers_consensus",
+              spreadHome: gameOdds.spreadHome !== null ? String(gameOdds.spreadHome) : undefined,
+              spreadAway: gameOdds.spreadAway !== null ? String(gameOdds.spreadAway) : undefined,
+              spreadHomeOdds: -110,
+              spreadAwayOdds: -110,
+              totalOver: gameOdds.totalOver !== null ? String(gameOdds.totalOver) : undefined,
+              totalOverOdds: -110,
+              totalUnderOdds: -110,
+              moneylineHome: gameOdds.moneylineHome,
+              moneylineAway: gameOdds.moneylineAway,
+            });
+            
+            if (gameOdds.openSpreadHome !== null && gameOdds.spreadHome !== null) {
+              const movement = gameOdds.spreadHome - gameOdds.openSpreadHome;
+              if (Math.abs(movement) >= 0.5) {
+                await storage.createLineMovement({
+                  gameId: game.id,
+                  marketType: "spread",
+                  previousValue: gameOdds.openSpreadHome,
+                  currentValue: gameOdds.spreadHome,
+                  movementDirection: movement > 0 ? "up" : "down",
+                  movementSize: Math.abs(movement),
+                });
+              }
+            }
+            
+            processed++;
+          }
+        }
+        
+        return {
+          success: true,
+          message: `Scraped ${processed} games from Covers.com`,
           recordsProcessed: processed,
         };
       }

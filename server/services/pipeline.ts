@@ -5,10 +5,39 @@ import { db } from "../db";
 import { games, teamStats, projections, opportunities, odds, type Game, type TeamStats, type Odds } from "@shared/schema";
 import { eq, and, gte, lte, or, ilike, desc } from "drizzle-orm";
 
-function calculateEdgePercentage(marketLine: number, fairLine: number, marketType: "spread" | "total"): number {
+function oddsToProbability(americanOdds: number): number {
+  if (americanOdds < 0) {
+    return Math.abs(americanOdds) / (Math.abs(americanOdds) + 100);
+  }
+  return 100 / (americanOdds + 100);
+}
+
+function calculateEdgePercentage(
+  marketLine: number, 
+  fairLine: number, 
+  marketType: "spread" | "total",
+  sport: string = "NFL",
+  americanOdds: number = -110
+): number {
   const diff = Math.abs(marketLine - fairLine);
-  const baseValue = marketType === "spread" ? Math.max(Math.abs(marketLine), 3) : Math.max(marketLine, 200);
-  return (diff / baseValue) * 100;
+  
+  const pointValues: Record<string, number> = {
+    NFL: 0.01,
+    NBA: 0.01,
+    CFB: 0.008,
+    CBB: 0.008,
+  };
+  
+  const pointValue = marketType === "spread" 
+    ? (pointValues[sport] || 0.01) 
+    : 0.004;
+  
+  const coverProb = Math.min(0.95, Math.max(0.05, 0.5 + (pointValue * diff)));
+  const impliedProb = oddsToProbability(americanOdds);
+  
+  const edge = (coverProb - impliedProb) * 100;
+  
+  return Math.min(15, Math.max(0, edge));
 }
 
 function determineSpreadSide(marketSpread: number, fairSpread: number): { side: "home" | "away"; edge: number } {
@@ -208,7 +237,8 @@ export async function runFullPipeline(
         
         if (marketSpread !== null) {
           const spreadResult = determineSpreadSide(marketSpread, projection.fairSpread);
-          const edgePct = calculateEdgePercentage(marketSpread, projection.fairSpread, "spread");
+          const spreadOdds = latestOdds?.spreadHomeOdds || -110;
+          const edgePct = calculateEdgePercentage(marketSpread, projection.fairSpread, "spread", game.sport, spreadOdds);
           const confidence = edgePct > 4 ? "High" : edgePct > 2.5 ? "Medium" : "Lean";
           
           if (edgePct > 1) {
@@ -243,7 +273,8 @@ export async function runFullPipeline(
         
         if (marketTotal !== null) {
           const totalResult = determineTotalSide(marketTotal, projection.fairTotal);
-          const edgePct = calculateEdgePercentage(marketTotal, projection.fairTotal, "total");
+          const totalOdds = latestOdds?.totalOverOdds || -110;
+          const edgePct = calculateEdgePercentage(marketTotal, projection.fairTotal, "total", game.sport, totalOdds);
           const confidence = edgePct > 3 ? "Medium" : "Lean";
           
           if (edgePct > 0.5) {

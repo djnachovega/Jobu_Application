@@ -7,6 +7,9 @@ import { generateProjection, createProjectionRecord, identifyOpportunities, ALGO
 import { analyzeGameForRlm, analyzeHandleSplit } from "./services/rlm-detector";
 import { discoverPatterns, analyzeGamePatterns, runPatternDiscovery } from "./services/ai-pattern-discovery";
 import { runScraper, type ScraperName } from "./services/scrapers";
+import { runFullPipeline, importExcelAndProcess } from "./services/pipeline";
+import { seedCommonAliases } from "./services/team-resolver";
+import * as fs from "fs";
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -216,7 +219,7 @@ export async function registerRoutes(
       res.json({ message: "Refresh started" });
       
       // Run the scraper in background
-      const validScrapers: ScraperName[] = ["actionnetwork", "teamrankings", "kenpom"];
+      const validScrapers: ScraperName[] = ["actionnetwork", "teamrankings", "kenpom", "schedules", "nba", "nfl", "cfb", "cbb"];
       if (validScrapers.includes(name as ScraperName)) {
         try {
           const result = await runScraper(name as ScraperName);
@@ -240,6 +243,59 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error refreshing data source:", error);
       res.status(500).json({ error: "Failed to refresh data source" });
+    }
+  });
+
+  // Full Pipeline - scrape schedules, generate projections, create opportunities
+  app.post("/api/pipeline/run", async (req: Request, res: Response) => {
+    try {
+      const sports = req.body.sports || ["NFL", "NBA", "CFB", "CBB"];
+      
+      res.json({ message: "Pipeline started", sports });
+      
+      // Run pipeline in background
+      runFullPipeline(sports).then(result => {
+        console.log("Pipeline complete:", result);
+      }).catch(err => {
+        console.error("Pipeline error:", err);
+      });
+    } catch (error) {
+      console.error("Error starting pipeline:", error);
+      res.status(500).json({ error: "Failed to start pipeline" });
+    }
+  });
+
+  // Seed team aliases
+  app.post("/api/teams/seed-aliases", async (req: Request, res: Response) => {
+    try {
+      const count = await seedCommonAliases();
+      res.json({ message: `Seeded ${count} team aliases` });
+    } catch (error) {
+      console.error("Error seeding aliases:", error);
+      res.status(500).json({ error: "Failed to seed aliases" });
+    }
+  });
+
+  // Import Excel files from attached_assets
+  app.post("/api/import/excel-assets", async (req: Request, res: Response) => {
+    try {
+      const assetsDir = "./attached_assets";
+      const files = fs.readdirSync(assetsDir).filter(f => f.endsWith(".xlsx"));
+      
+      const results = [];
+      for (const file of files) {
+        const buffer = fs.readFileSync(`${assetsDir}/${file}`);
+        const result = await importExcelAndProcess(buffer, file);
+        results.push({ file, ...result });
+      }
+      
+      res.json({ 
+        message: `Imported ${results.length} Excel files`,
+        results 
+      });
+    } catch (error) {
+      console.error("Error importing Excel assets:", error);
+      res.status(500).json({ error: "Failed to import Excel assets" });
     }
   });
 
@@ -358,7 +414,7 @@ export async function registerRoutes(
         game.sport,
         projectionResult,
         latestOdds?.spreadHome || null,
-        latestOdds?.totalLine || null
+        latestOdds?.totalOver || null
       );
       
       // Save opportunities

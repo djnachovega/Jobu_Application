@@ -33,12 +33,26 @@ export const teams = pgTable("teams", {
   sport: text("sport").notNull(), // NFL, NBA, CFB, CBB
   conference: text("conference"),
   division: text("division"),
+  externalId: text("external_id"), // ESPN/league ID
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
 
 export const insertTeamSchema = createInsertSchema(teams).omit({ id: true, createdAt: true });
 export type InsertTeam = z.infer<typeof insertTeamSchema>;
 export type Team = typeof teams.$inferSelect;
+
+// Team aliases table - maps various name formats to canonical team
+export const teamAliases = pgTable("team_aliases", {
+  id: serial("id").primaryKey(),
+  teamId: integer("team_id").references(() => teams.id).notNull(),
+  alias: text("alias").notNull(),
+  sport: text("sport").notNull(),
+  source: text("source"), // excel, espn, nba, nfl, etc
+});
+
+export const insertTeamAliasSchema = createInsertSchema(teamAliases).omit({ id: true });
+export type InsertTeamAlias = z.infer<typeof insertTeamAliasSchema>;
+export type TeamAlias = typeof teamAliases.$inferSelect;
 
 // Games table
 export const games = pgTable("games", {

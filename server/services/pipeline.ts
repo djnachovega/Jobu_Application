@@ -156,7 +156,7 @@ function getTeamNameVariants(teamName: string): string[] {
     variants.push(lastWord);
   }
   
-  return [...new Set(variants)];
+  return Array.from(new Set(variants));
 }
 
 async function findTeamStats(teamName: string, sport: string, splitType: string): Promise<TeamStats | null> {
@@ -460,10 +460,10 @@ export async function importExcelAndProcess(buffer: Buffer, filename: string): P
   if (statsImported > 0) {
     console.log("Excel import complete, triggering projection refresh...");
     // Get unique sports from imported stats
-    const sports = [...new Set(result.stats.map(s => s.sport))];
+    const sports = Array.from(new Set(result.stats.map(s => s.sport)));
     for (const sport of sports) {
       try {
-        await runPipeline(sport);
+        await runFullPipeline([sport]);
       } catch (e) {
         result.errors.push(`Auto-refresh for ${sport} failed: ${e instanceof Error ? e.message : "Unknown"}`);
       }

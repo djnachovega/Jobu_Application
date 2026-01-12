@@ -84,12 +84,20 @@ function blendTeamStats(
   let sos = 0;
   
   // Helper to get efficiency based on sport
+  // Basketball ratings may come in as decimals (1.18 = 118) or full values (118)
+  const normalizeBasketballRating = (val: number): number => {
+    // If value is less than 2, it's in decimal form (e.g., 1.18 = 118%)
+    return val < 2 ? val * 100 : val;
+  };
+  
   const getOffEff = (stats: TeamStats | undefined): number | null => {
     if (!stats) return null;
     if (sport === "NFL" || sport === "CFB") {
       return stats.offensivePPP || stats.yardsPerPlay ? (stats.offensivePPP || 0) * 7 : null;
     }
-    return stats.offensiveRating || stats.offensivePPP;
+    // Basketball: normalize decimal ratings to full scale
+    const rating = stats.offensiveRating || stats.offensivePPP;
+    return rating ? normalizeBasketballRating(rating) : null;
   };
   
   const getDefEff = (stats: TeamStats | undefined): number | null => {
@@ -97,7 +105,9 @@ function blendTeamStats(
     if (sport === "NFL" || sport === "CFB") {
       return stats.defensivePPP || stats.opponentYardsPerPlay ? (stats.defensivePPP || 0) * 7 : null;
     }
-    return stats.defensiveRating || stats.defensivePPP;
+    // Basketball: normalize decimal ratings to full scale
+    const rating = stats.defensiveRating || stats.defensivePPP;
+    return rating ? normalizeBasketballRating(rating) : null;
   };
   
   const getPace = (stats: TeamStats | undefined): number | null => {

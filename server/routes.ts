@@ -211,9 +211,7 @@ export async function registerRoutes(
       // Initialize default sources if none exist
       if (sources.length === 0) {
         const defaultSources = [
-          { name: "actionnetwork", displayName: "Action Network", requiresAuth: true, refreshIntervalMinutes: 15 },
           { name: "teamrankings", displayName: "TeamRankings", requiresAuth: false, refreshIntervalMinutes: 60 },
-          { name: "kenpom", displayName: "KenPom", requiresAuth: true, refreshIntervalMinutes: 60 },
         ];
         
         for (const source of defaultSources) {
@@ -243,7 +241,7 @@ export async function registerRoutes(
       res.json({ message: "Refresh started" });
       
       // Run the scraper in background
-      const validScrapers: ScraperName[] = ["actionnetwork", "teamrankings", "kenpom", "schedules", "nba", "nfl", "cfb", "cbb"];
+      const validScrapers: ScraperName[] = ["teamrankings", "schedules", "nba", "nfl", "cfb", "cbb"];
       if (validScrapers.includes(name as ScraperName)) {
         try {
           const result = await runScraper(name as ScraperName);

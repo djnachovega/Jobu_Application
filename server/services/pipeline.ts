@@ -236,33 +236,9 @@ export async function runFullPipeline(
             result.opportunitiesCreated++;
           }
         } else {
-          const edge = Math.random() * 5 + 1;
-          const confidence = edge > 4 ? "High" : edge > 2.5 ? "Medium" : "Lean";
-          
-          if (edge > 1.5) {
-            const side = projection.projectedMargin > 0 ? "home" : "away";
-            const teamName = side === "home" ? game.homeTeamName : game.awayTeamName;
-            
-            await db.insert(opportunities).values({
-              gameId: game.id,
-              projectionId: savedProjection.id,
-              sport: game.sport,
-              marketType: "spread",
-              side,
-              playDescription: `${teamName} ${projection.fairSpread > 0 ? "+" : ""}${projection.fairSpread}`,
-              currentLine: projection.fairSpread,
-              currentOdds: -110,
-              fairLine: projection.fairSpread,
-              edgePercentage: edge,
-              confidence,
-              volatilityScore: projection.volatilityScore,
-              isReverseLineMovement: false,
-              drivers: projection.drivers,
-              status: "active",
-            });
-            
-            result.opportunitiesCreated++;
-          }
+          // No market data available - skip creating opportunity 
+          // without real market vs fair comparison
+          console.log(`No market spread data for ${game.awayTeamName} @ ${game.homeTeamName} - skipping spread opportunity`);
         }
         
         if (marketTotal !== null) {
@@ -291,29 +267,9 @@ export async function runFullPipeline(
             
             result.opportunitiesCreated++;
           }
-        } else if (Math.random() > 0.5) {
-          const totalEdge = Math.random() * 4 + 0.5;
-          const totalSide = projection.projectedTotal > 220 ? "over" : "under";
-          
-          await db.insert(opportunities).values({
-            gameId: game.id,
-            projectionId: savedProjection.id,
-            sport: game.sport,
-            marketType: "total",
-            side: totalSide,
-            playDescription: `${totalSide.charAt(0).toUpperCase() + totalSide.slice(1)} ${projection.fairTotal}`,
-            currentLine: projection.fairTotal,
-            currentOdds: -110,
-            fairLine: projection.fairTotal,
-            edgePercentage: totalEdge,
-            confidence: totalEdge > 3 ? "Medium" : "Lean",
-            volatilityScore: projection.volatilityScore,
-            isReverseLineMovement: false,
-            drivers: [`Projected total: ${projection.projectedTotal}`],
-            status: "active",
-          });
-          
-          result.opportunitiesCreated++;
+        } else {
+          // No market total data available - skip creating opportunity
+          console.log(`No market total data for ${game.awayTeamName} @ ${game.homeTeamName} - skipping total opportunity`);
         }
         
       } catch (gameError) {

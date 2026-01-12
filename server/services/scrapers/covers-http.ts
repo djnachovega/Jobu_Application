@@ -156,97 +156,115 @@ async function scrapeOddsForSport(
     const response = await client.get(url);
     const $ = parseHtml(response.data);
 
-    const rows = $("tr").toArray();
+    const matchupSections = $("table.covers-CoversMatchups-matches, .covers-CoversMatchups").toArray();
     
-    for (const row of rows) {
+    $("tr").each((_, row) => {
       const $row = $(row);
-      const firstTd = $row.find("td").first();
-      const text = firstTd.text();
+      const text = $row.text();
       
-      const teamLinks = firstTd.find("a[href*='matchup']");
-      const strongTags = firstTd.find("strong");
+      const strongTags = $row.find("strong").toArray();
+      if (strongTags.length < 2) return;
       
-      if (strongTags.length < 2) continue;
+      const awayAbbrev = $(strongTags[0]).text().trim().replace(/[^A-Z]/gi, "").toUpperCase();
+      const homeAbbrev = $(strongTags[1]).text().trim().replace(/[^A-Z]/gi, "").toUpperCase();
       
-      const awayAbbrev = $(strongTags[0]).text().trim().replace(/[^A-Z]/gi, "");
-      const homeAbbrev = $(strongTags[1]).text().trim().replace(/[^A-Z]/gi, "");
-      
-      if (!awayAbbrev || !homeAbbrev) continue;
-      if (awayAbbrev.length < 2 || homeAbbrev.length < 2) continue;
-      if (awayAbbrev.length > 4 || homeAbbrev.length > 4) continue;
+      if (!awayAbbrev || !homeAbbrev) return;
+      if (awayAbbrev.length < 2 || homeAbbrev.length < 2) return;
+      if (awayAbbrev.length > 4 || homeAbbrev.length > 4) return;
       
       const awayTeam = expandTeamName(awayAbbrev, sport);
       const homeTeam = expandTeamName(homeAbbrev, sport);
       
-      const openingMatch = text.match(/([+-]?\d+\.?\d*)\s*(\d+\.?\d*)/);
-      let openSpread: number | null = null;
-      let openTotal: number | null = null;
+      if (awayTeam === awayAbbrev && homeTeam === homeAbbrev) return;
       
-      if (openingMatch) {
-        const first = parseFloat(openingMatch[1]);
-        const second = parseFloat(openingMatch[2]);
-        if (Math.abs(first) < 50) openSpread = first;
-        if (second > 30 && second < 300) openTotal = second;
-      }
-      
-      const timeMatch = text.match(/(\d{1,2}:\d{2})/);
-      const gameTime = timeMatch ? timeMatch[1] : "";
-      
-      const allCells = $row.find("td").toArray();
       let spreadHome: number | null = null;
       let spreadAway: number | null = null;
       let totalOver: number | null = null;
       let mlHome: number | null = null;
       let mlAway: number | null = null;
+      let openSpread: number | null = null;
+      let openTotal: number | null = null;
       
-      for (let i = 1; i < Math.min(allCells.length, 5); i++) {
-        const cellText = $(allCells[i]).text();
-        const lines = cellText.split("\n").map(l => l.trim()).filter(l => l.length > 0);
-        
-        if (lines.length >= 2) {
-          const awaySpreads = parseSpreadFromCell(lines[0]);
-          const homeSpreads = parseSpreadFromCell(lines[1]);
-          
-          if (spreadAway === null && awaySpreads.spread !== null) {
-            spreadAway = awaySpreads.spread;
-          }
-          if (spreadHome === null && homeSpreads.spread !== null) {
-            spreadHome = homeSpreads.spread;
-          }
-          
-          if (totalOver === null) {
-            const total = parseTotalFromCell(lines[0]);
-            if (total !== null) totalOver = total;
-          }
-          
-          if (mlAway === null) {
-            mlAway = parseMoneylineFromCell(lines[0]);
-          }
-          if (mlHome === null) {
-            mlHome = parseMoneylineFromCell(lines[1]);
+      $row.find("a[data-betslip-side='away']").each((_, el) => {
+        const linkText = $(el).text().trim();
+        const spreadMatch = linkText.match(/^([+-]?\d+\.?\d*)/);
+        if (spreadMatch && spreadAway === null) {
+          const val = parseFloat(spreadMatch[1]);
+          if (Math.abs(val) <= 50) spreadAway = val;
+        }
+      });
+      
+      $row.find("a[data-betslip-side='home']").each((_, el) => {
+        const linkText = $(el).text().trim();
+        const spreadMatch = linkText.match(/^([+-]?\d+\.?\d*)/);
+        if (spreadMatch && spreadHome === null) {
+          const val = parseFloat(spreadMatch[1]);
+          if (Math.abs(val) <= 50) spreadHome = val;
+        }
+      });
+      
+      $row.find("td[data-type='spread'] a").each((_, el) => {
+        const linkText = $(el).text().trim();
+        const spreadMatch = linkText.match(/^([+-]?\d+\.?\d*)/);
+        if (spreadMatch) {
+          const val = parseFloat(spreadMatch[1]);
+          if (Math.abs(val) <= 50) {
+            const side = $(el).attr("data-betslip-game");
+            if (side === "away" && spreadAway === null) spreadAway = val;
+            if (side === "home" && spreadHome === null) spreadHome = val;
           }
         }
-      }
+      });
       
-      const matchupLink = firstTd.find("a[href*='matchup']").first().attr("href") || null;
+      $row.find(".opening-lines-div .away-cell .__american, .opening-lines-div .away-cell span").each((_, el) => {
+        const txt = $(el).text().trim();
+        const match = txt.match(/^([+-]?\d+\.?\d*)$/);
+        if (match && openSpread === null) {
+          const val = parseFloat(match[1]);
+          if (Math.abs(val) <= 50) openSpread = val;
+        }
+      });
       
-      if (awayTeam !== awayAbbrev || homeTeam !== homeAbbrev) {
-        odds.push({
-          awayTeam,
-          homeTeam,
-          sport,
-          gameTime,
-          spreadHome,
-          spreadAway,
-          totalOver,
-          moneylineHome: mlHome,
-          moneylineAway: mlAway,
-          openSpreadHome: openSpread,
-          openTotalOver: openTotal,
-          matchupUrl: matchupLink,
-        });
-      }
-    }
+      $row.find("td[data-type='total'] a, a[data-betslip-url*='total']").each((_, el) => {
+        const linkText = $(el).text().trim();
+        const totalMatch = linkText.match(/^[oOuU]?\s*(\d+\.?\d*)/);
+        if (totalMatch && totalOver === null) {
+          const val = parseFloat(totalMatch[1]);
+          if (val > 30 && val < 300) totalOver = val;
+        }
+      });
+      
+      $row.find("td[data-type='moneyline'] a, a[data-betslip-url*='moneyline']").each((_, el) => {
+        const linkText = $(el).text().trim();
+        const mlMatch = linkText.match(/([+-]\d{3,})/);
+        if (mlMatch) {
+          const val = parseInt(mlMatch[1]);
+          const side = $(el).attr("data-betslip-game");
+          if (side === "away" && mlAway === null) mlAway = val;
+          if (side === "home" && mlHome === null) mlHome = val;
+        }
+      });
+      
+      const timeMatch = text.match(/(\d{1,2}:\d{2})/);
+      const gameTime = timeMatch ? timeMatch[1] : "";
+      
+      const matchupLink = $row.find("a[href*='matchup']").first().attr("href") || null;
+      
+      odds.push({
+        awayTeam,
+        homeTeam,
+        sport,
+        gameTime,
+        spreadHome,
+        spreadAway,
+        totalOver,
+        moneylineHome: mlHome,
+        moneylineAway: mlAway,
+        openSpreadHome: openSpread,
+        openTotalOver: openTotal,
+        matchupUrl: matchupLink,
+      });
+    });
 
     console.log(`Scraped ${odds.length} games with valid team names from Covers ${sport}`);
   } catch (error) {
@@ -313,13 +331,13 @@ async function scrapeMatchupPercentages(
 
     const pageText = $("body").text();
     
-    const spreadSection = pageText.match(/Spread.*?(\d{1,3})%.*?(\d{1,3})%/is);
+    const spreadSection = pageText.match(/Spread[\s\S]*?(\d{1,3})%[\s\S]*?(\d{1,3})%/i);
     if (spreadSection) {
       spreadAwayTicketPct = parseInt(spreadSection[1]);
       spreadHomeTicketPct = parseInt(spreadSection[2]);
     }
     
-    const totalSection = pageText.match(/Total.*?Over.*?(\d{1,3})%.*?Under.*?(\d{1,3})%/is);
+    const totalSection = pageText.match(/Total[\s\S]*?Over[\s\S]*?(\d{1,3})%[\s\S]*?Under[\s\S]*?(\d{1,3})%/i);
     if (totalSection) {
       totalOverTicketPct = parseInt(totalSection[1]);
       totalUnderTicketPct = parseInt(totalSection[2]);
@@ -328,19 +346,19 @@ async function scrapeMatchupPercentages(
     $("div, section").each((_, el) => {
       const text = $(el).text();
       
-      const spreadMatch = text.match(/(?:Spread|ATS).*?(\d{1,3})%.*?(\d{1,3})%/is);
+      const spreadMatch = text.match(/(?:Spread|ATS)[\s\S]*?(\d{1,3})%[\s\S]*?(\d{1,3})%/i);
       if (spreadMatch && !spreadAwayTicketPct) {
         spreadAwayTicketPct = parseInt(spreadMatch[1]);
         spreadHomeTicketPct = parseInt(spreadMatch[2]);
       }
       
-      const totalMatch = text.match(/(?:Total|O\/U).*?(\d{1,3})%.*?(\d{1,3})%/is);
+      const totalMatch = text.match(/(?:Total|O\/U)[\s\S]*?(\d{1,3})%[\s\S]*?(\d{1,3})%/i);
       if (totalMatch && !totalOverTicketPct) {
         totalOverTicketPct = parseInt(totalMatch[1]);
         totalUnderTicketPct = parseInt(totalMatch[2]);
       }
       
-      const moneyMatch = text.match(/Money.*?(\d{1,3})%.*?(\d{1,3})%/is);
+      const moneyMatch = text.match(/Money[\s\S]*?(\d{1,3})%[\s\S]*?(\d{1,3})%/i);
       if (moneyMatch) {
         spreadAwayMoneyPct = parseInt(moneyMatch[1]);
         spreadHomeMoneyPct = parseInt(moneyMatch[2]);

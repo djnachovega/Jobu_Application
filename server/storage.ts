@@ -171,9 +171,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getGamesToday(sports?: string[]): Promise<Game[]> {
-    // Get current date in Eastern timezone (EST = UTC-5)
+    // Get current time - only show games that haven't started yet
     const now = new Date();
-    // Convert to Eastern by subtracting 5 hours from UTC
+    
+    // Get current date in Eastern timezone (EST = UTC-5)
     const easternNow = new Date(now.getTime() - 5 * 60 * 60 * 1000);
     
     // Get start of today in Eastern time (midnight Eastern)
@@ -185,10 +186,11 @@ export class DatabaseStorage implements IStorage {
     const todayStartUtc = new Date(todayEasternMidnight.getTime() + 5 * 60 * 60 * 1000);
     const tomorrowStartUtc = new Date(todayStartUtc.getTime() + 24 * 60 * 60 * 1000);
     
-    console.log(`getGamesToday: Eastern date=${easternNow.toISOString().split('T')[0]}, UTC range: ${todayStartUtc.toISOString()} to ${tomorrowStartUtc.toISOString()}`);
+    console.log(`getGamesToday: Eastern date=${easternNow.toISOString().split('T')[0]}, showing games after ${now.toISOString()}`);
 
+    // Only show games that haven't started yet (game time > current time)
     let conditions = and(
-      gte(games.gameDate, todayStartUtc),
+      gte(games.gameDate, now),
       lte(games.gameDate, tomorrowStartUtc)
     );
 
@@ -475,26 +477,33 @@ export class DatabaseStorage implements IStorage {
 
   // Opportunities
   async getOpportunities(filters?: { sports?: string[]; confidence?: string; status?: string }): Promise<Opportunity[]> {
-    let conditions = [];
+    const now = new Date();
+    
+    // Join with games to only get opportunities for upcoming games
+    const results = await db.select({
+      opportunity: opportunities
+    })
+    .from(opportunities)
+    .leftJoin(games, eq(opportunities.gameId, games.id))
+    .where(gte(games.gameDate, now))
+    .orderBy(desc(opportunities.edgePercentage));
+    
+    let opps = results.map(r => r.opportunity);
 
+    // Apply additional filters
     if (filters?.sports && filters.sports.length > 0) {
-      conditions.push(inArray(opportunities.sport, filters.sports));
+      opps = opps.filter(o => filters.sports!.includes(o.sport));
     }
     if (filters?.confidence) {
-      conditions.push(eq(opportunities.confidence, filters.confidence));
+      opps = opps.filter(o => o.confidence === filters.confidence);
     }
     if (filters?.status) {
-      conditions.push(eq(opportunities.status, filters.status));
+      opps = opps.filter(o => o.status === filters.status);
     } else {
-      conditions.push(eq(opportunities.status, "active"));
+      opps = opps.filter(o => o.status === "active");
     }
 
-    if (conditions.length > 0) {
-      return db.select().from(opportunities)
-        .where(and(...conditions))
-        .orderBy(desc(opportunities.edgePercentage));
-    }
-    return db.select().from(opportunities).orderBy(desc(opportunities.edgePercentage));
+    return opps;
   }
 
   async getOpportunityById(id: number): Promise<Opportunity | undefined> {
@@ -610,21 +619,28 @@ export class DatabaseStorage implements IStorage {
     rlmSignalsToday: number;
     gamesWithEdge: number;
   }> {
+    const now = new Date();
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
     try {
-      // Get all active opportunities with optional sport filter
-      let allOpps;
+      // Get opportunities only for upcoming games (game hasn't started yet)
+      const results = await db.select({
+        opportunity: opportunities,
+        game: games
+      })
+      .from(opportunities)
+      .leftJoin(games, eq(opportunities.gameId, games.id))
+      .where(and(
+        eq(opportunities.status, "active"),
+        gte(games.gameDate, now)
+      ));
+      
+      let allOpps = results.map(r => r.opportunity);
+      
+      // Apply sport filter
       if (sports && sports.length > 0) {
-        allOpps = await db.select().from(opportunities)
-          .where(and(
-            eq(opportunities.status, "active"),
-            inArray(opportunities.sport, sports)
-          ));
-      } else {
-        allOpps = await db.select().from(opportunities)
-          .where(eq(opportunities.status, "active"));
+        allOpps = allOpps.filter(o => sports.includes(o.sport));
       }
       
       // Count totals
@@ -632,10 +648,18 @@ export class DatabaseStorage implements IStorage {
       const highConfidenceCount = allOpps.filter(o => o.confidence === "High").length;
       const gamesWithEdge = new Set(allOpps.map(o => o.gameId)).size;
 
-      // Count RLM signals today
-      const rlmToday = await db.select().from(rlmSignals)
-        .where(gte(rlmSignals.detectedAt, today));
-      const rlmSignalsToday = rlmToday.length;
+      // Count RLM signals today for upcoming games
+      const rlmResults = await db.select({
+        signal: rlmSignals,
+        game: games
+      })
+      .from(rlmSignals)
+      .leftJoin(games, eq(rlmSignals.gameId, games.id))
+      .where(and(
+        gte(rlmSignals.detectedAt, today),
+        gte(games.gameDate, now)
+      ));
+      const rlmSignalsToday = rlmResults.length;
 
       return {
         totalOpportunities,

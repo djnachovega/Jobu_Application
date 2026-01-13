@@ -1,4 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { StatsCard } from "@/components/stats-card";
 import { OpportunityCard } from "@/components/opportunity-card";
 import { GameCard } from "@/components/game-card";
@@ -16,6 +17,8 @@ import {
   ArrowRight
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import type { Opportunity, Game, Odds } from "@shared/schema";
 
 interface DashboardProps {
@@ -36,8 +39,42 @@ interface GameWithOdds extends Game {
 
 export function Dashboard({ activeSports }: DashboardProps) {
   const [, navigate] = useLocation();
+  const { toast } = useToast();
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const sportsParam = activeSports.length > 0 ? `?sports=${activeSports.join(",")}` : "";
   
+  const refreshMutation = useMutation({
+    mutationFn: async () => {
+      setIsRefreshing(true);
+      return apiRequest("POST", "/api/pipeline/run");
+    },
+    onSuccess: () => {
+      toast({
+        title: "Refreshing Data",
+        description: "Fetching latest odds from Covers.com. This may take 30-60 seconds.",
+      });
+      // Poll for updates after a delay
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/opportunities"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/games/today"] });
+        setIsRefreshing(false);
+        toast({
+          title: "Refresh Complete",
+          description: "Dashboard updated with latest data.",
+        });
+      }, 35000);
+    },
+    onError: () => {
+      setIsRefreshing(false);
+      toast({
+        title: "Refresh Failed",
+        description: "Could not refresh data. Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
   const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
     queryKey: ["/api/dashboard/stats", activeSports],
     queryFn: async () => {
@@ -85,11 +122,12 @@ export function Dashboard({ activeSports }: DashboardProps) {
         <Button 
           variant="outline" 
           size="sm"
-          onClick={() => refetchOpps()}
+          onClick={() => refreshMutation.mutate()}
+          disabled={isRefreshing}
           data-testid="button-refresh-dashboard"
         >
-          <RefreshCw className="h-4 w-4 mr-2" />
-          Refresh
+          <RefreshCw className={`h-4 w-4 mr-2 ${isRefreshing ? "animate-spin" : ""}`} />
+          {isRefreshing ? "Refreshing..." : "Refresh"}
         </Button>
       </div>
 

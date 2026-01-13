@@ -1,11 +1,8 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DataSourceCard } from "@/components/data-source-card";
 import { FileUpload } from "@/components/file-upload";
@@ -15,7 +12,6 @@ import {
   Upload, 
   Key, 
   RefreshCw,
-  Save,
   CheckCircle
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -232,76 +228,19 @@ export function DataSourcesPage() {
         </TabsContent>
 
         <TabsContent value="credentials" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Action Network Credentials</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="an-email">Email</Label>
-                  <Input 
-                    id="an-email" 
-                    type="email" 
-                    placeholder="your@email.com"
-                    data-testid="input-an-email"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="an-password">Password</Label>
-                  <Input 
-                    id="an-password" 
-                    type="password" 
-                    placeholder="••••••••"
-                    data-testid="input-an-password"
-                  />
-                </div>
-              </div>
-              <Button size="sm" data-testid="button-save-an">
-                <Save className="h-4 w-4 mr-2" />
-                Save Credentials
-              </Button>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">KenPom Credentials</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="kp-email">Email</Label>
-                  <Input 
-                    id="kp-email" 
-                    type="email" 
-                    placeholder="your@email.com"
-                    data-testid="input-kp-email"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="kp-password">Password</Label>
-                  <Input 
-                    id="kp-password" 
-                    type="password" 
-                    placeholder="••••••••"
-                    data-testid="input-kp-password"
-                  />
-                </div>
-              </div>
-              <Button size="sm" data-testid="button-save-kp">
-                <Save className="h-4 w-4 mr-2" />
-                Save Credentials
-              </Button>
-            </CardContent>
-          </Card>
-
           <Card className="bg-muted/50">
             <CardContent className="p-4">
-              <p className="text-sm text-muted-foreground">
-                Credentials are securely stored and used only for automated data collection. 
-                Your login information is never shared or exposed.
-              </p>
+              <div className="flex items-start gap-3">
+                <CheckCircle className="h-5 w-5 text-green-500 mt-0.5" />
+                <div>
+                  <p className="font-medium">No Credentials Required</p>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    This platform uses Covers.com for real-time odds and betting data, 
+                    which does not require login credentials. Team statistics can be 
+                    uploaded via Excel files in the Upload Data tab.
+                  </p>
+                </div>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>

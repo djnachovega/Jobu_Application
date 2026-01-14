@@ -3,8 +3,111 @@ import { runScraper } from "./scrapers";
 import { generateProjection } from "./jobu-algorithm";
 import { detectRlmFromLines } from "./rlm-detector";
 import { db } from "../db";
-import { games, teamStats, projections, opportunities, odds, type Game, type TeamStats, type Odds } from "@shared/schema";
-import { eq, and, gte, lte, or, ilike, desc } from "drizzle-orm";
+import { games, teamStats, projections, opportunities, odds, type Game, type TeamStats, type Odds, type Opportunity } from "@shared/schema";
+import { eq, and, gte, lte, or, ilike, desc, lt } from "drizzle-orm";
+
+// Find existing opportunity by game, market type, and side
+async function findExistingOpportunity(
+  gameId: number, 
+  marketType: string, 
+  side: string
+): Promise<Opportunity | null> {
+  const [existing] = await db.select().from(opportunities)
+    .where(and(
+      eq(opportunities.gameId, gameId),
+      eq(opportunities.marketType, marketType),
+      eq(opportunities.side, side),
+      eq(opportunities.status, "active")
+    ))
+    .limit(1);
+  return existing || null;
+}
+
+// Upsert opportunity - update if exists, insert if not
+// Also removes opposite side opportunities when side changes
+async function upsertOpportunity(oppData: {
+  gameId: number;
+  projectionId: number;
+  sport: string;
+  marketType: string;
+  side: string;
+  playDescription: string;
+  currentLine: number;
+  currentOdds: number;
+  fairLine: number;
+  edgePercentage: number;
+  confidence: string;
+  volatilityScore: number;
+  isReverseLineMovement: boolean;
+  drivers: string[];
+}): Promise<{ isNew: boolean }> {
+  // First, expire any opposite side opportunity for this game/market
+  const oppositeSide = oppData.marketType === "total" 
+    ? (oppData.side === "over" ? "under" : "over")
+    : (oppData.side === "home" ? "away" : "home");
+  
+  const oppositeOpp = await findExistingOpportunity(oppData.gameId, oppData.marketType, oppositeSide);
+  if (oppositeOpp) {
+    await db.update(opportunities)
+      .set({ status: "expired", updatedAt: new Date() })
+      .where(eq(opportunities.id, oppositeOpp.id));
+  }
+  
+  const existing = await findExistingOpportunity(oppData.gameId, oppData.marketType, oppData.side);
+  
+  if (existing) {
+    // Update existing opportunity with latest data
+    await db.update(opportunities)
+      .set({
+        projectionId: oppData.projectionId,
+        playDescription: oppData.playDescription,
+        currentLine: oppData.currentLine,
+        currentOdds: oppData.currentOdds,
+        fairLine: oppData.fairLine,
+        edgePercentage: oppData.edgePercentage,
+        confidence: oppData.confidence,
+        volatilityScore: oppData.volatilityScore,
+        isReverseLineMovement: oppData.isReverseLineMovement,
+        drivers: oppData.drivers,
+        updatedAt: new Date(),
+      })
+      .where(eq(opportunities.id, existing.id));
+    return { isNew: false };
+  }
+  
+  // Insert new opportunity
+  await db.insert(opportunities).values({
+    ...oppData,
+    status: "active",
+  });
+  return { isNew: true };
+}
+
+// Clean up stale opportunities for games that have passed
+async function cleanupStaleOpportunities(): Promise<number> {
+  const now = new Date();
+  
+  // Get all active opportunities for games that have already started
+  const staleOpps = await db.select({ oppId: opportunities.id })
+    .from(opportunities)
+    .leftJoin(games, eq(opportunities.gameId, games.id))
+    .where(and(
+      eq(opportunities.status, "active"),
+      lt(games.gameDate, now)
+    ));
+  
+  if (staleOpps.length > 0) {
+    const staleIds = staleOpps.map(o => o.oppId);
+    for (const id of staleIds) {
+      await db.update(opportunities)
+        .set({ status: "expired", updatedAt: new Date() })
+        .where(eq(opportunities.id, id));
+    }
+    console.log(`Marked ${staleOpps.length} opportunities as expired (games already started)`);
+  }
+  
+  return staleOpps.length;
+}
 
 function oddsToProbability(americanOdds: number): number {
   if (americanOdds < 0) {
@@ -178,6 +281,14 @@ async function findTeamStats(teamName: string, sport: string, splitType: string)
   return stats[0] || null;
 }
 
+// Sport-specific default projections
+const SPORT_DEFAULTS = {
+  NFL: { baseTotal: 45, variance: 8, marginRange: 7 },
+  CFB: { baseTotal: 48, variance: 10, marginRange: 10 },
+  NBA: { baseTotal: 225, variance: 12, marginRange: 6 },
+  CBB: { baseTotal: 140, variance: 10, marginRange: 8 },  // Realistic college basketball total
+};
+
 function generateMockProjection(game: Game): {
   projectedAwayScore: number;
   projectedHomeScore: number;
@@ -188,11 +299,11 @@ function generateMockProjection(game: Game): {
   volatilityScore: number;
   drivers: string[];
 } {
-  const baseTotal = game.sport === "NFL" || game.sport === "CFB" ? 45 : 215;
-  const variance = game.sport === "NFL" || game.sport === "CFB" ? 8 : 15;
+  const defaults = SPORT_DEFAULTS[game.sport as keyof typeof SPORT_DEFAULTS] || SPORT_DEFAULTS.NBA;
   
-  const projectedTotal = baseTotal + (Math.random() - 0.5) * variance * 2;
-  const margin = (Math.random() - 0.5) * 10;
+  // Generate realistic projections based on sport
+  const projectedTotal = defaults.baseTotal + (Math.random() - 0.5) * defaults.variance * 2;
+  const margin = (Math.random() - 0.5) * defaults.marginRange * 2;
   const projectedHomeScore = (projectedTotal + margin) / 2;
   const projectedAwayScore = (projectedTotal - margin) / 2;
   
@@ -223,6 +334,17 @@ export async function runFullPipeline(
   };
   
   console.log("Starting full pipeline...");
+  
+  // Step 0: Clean up stale opportunities from past games
+  try {
+    console.log("Step 0: Cleaning up stale opportunities...");
+    const expiredCount = await cleanupStaleOpportunities();
+    if (expiredCount > 0) {
+      console.log(`Expired ${expiredCount} opportunities for past games`);
+    }
+  } catch (error) {
+    result.errors.push(`Cleanup error: ${error instanceof Error ? error.message : "Unknown"}`);
+  }
   
   try {
     console.log("Step 1: Scraping schedules...");
@@ -360,7 +482,8 @@ export async function runFullPipeline(
             const teamName = spreadResult.side === "home" ? game.homeTeamName : game.awayTeamName;
             const displayLine = spreadResult.side === "home" ? marketSpread : -marketSpread;
             
-            await db.insert(opportunities).values({
+            // Use upsert to update existing or create new opportunity
+            const { isNew } = await upsertOpportunity({
               gameId: game.id,
               projectionId: savedProjection.id,
               sport: game.sport,
@@ -377,15 +500,12 @@ export async function runFullPipeline(
               drivers: spreadRlm.isRlm 
                 ? [...projection.drivers, `RLM detected (${spreadRlm.strength}): line moved ${spreadRlm.direction}`]
                 : projection.drivers,
-              status: "active",
             });
             
-            result.opportunitiesCreated++;
+            if (isNew) result.opportunitiesCreated++;
           }
         } else {
-          // No market data available - skip creating opportunity 
-          // without real market vs fair comparison
-          console.log(`No market spread data for ${game.awayTeamName} @ ${game.homeTeamName} - skipping spread opportunity`);
+          console.log(`No market spread data for ${game.awayTeamName} @ ${game.homeTeamName} - skipping`);
         }
         
         if (marketTotal !== null) {
@@ -394,11 +514,12 @@ export async function runFullPipeline(
           const edgePct = calculateEdgePercentage(marketTotal, projection.fairTotal, "total", game.sport, totalOdds);
           const confidence = edgePct > 3 ? "Medium" : "Lean";
           
-          // Detect RLM using opening vs current total (openingTotal already fetched above)
+          // Detect RLM using opening vs current total
           const totalRlm = detectRlmFromLines(openingTotal, marketTotal, null, "total");
           
           if (edgePct > 0.5) {
-            await db.insert(opportunities).values({
+            // Use upsert to update existing or create new opportunity
+            const { isNew } = await upsertOpportunity({
               gameId: game.id,
               projectionId: savedProjection.id,
               sport: game.sport,
@@ -415,14 +536,12 @@ export async function runFullPipeline(
               drivers: totalRlm.isRlm 
                 ? [`Projected total: ${projection.projectedTotal}`, `RLM detected (${totalRlm.strength}): line moved ${totalRlm.direction}`]
                 : [`Projected total: ${projection.projectedTotal}`],
-              status: "active",
             });
             
-            result.opportunitiesCreated++;
+            if (isNew) result.opportunitiesCreated++;
           }
         } else {
-          // No market total data available - skip creating opportunity
-          console.log(`No market total data for ${game.awayTeamName} @ ${game.homeTeamName} - skipping total opportunity`);
+          console.log(`No market total data for ${game.awayTeamName} @ ${game.homeTeamName} - skipping`);
         }
         
       } catch (gameError) {

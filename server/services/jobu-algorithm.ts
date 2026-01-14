@@ -66,6 +66,21 @@ const DEFAULT_METRICS = {
   CBB: { offEff: 105, defEff: 105, pace: 68 },    // ~105 rating, 68 possessions = ~143 total
 };
 
+// Sanity check ranges for projected totals (min, max)
+const TOTAL_SANITY_RANGES = {
+  NFL: { min: 30, max: 65 },     // Realistic NFL game totals
+  NBA: { min: 190, max: 260 },   // Realistic NBA game totals
+  CFB: { min: 35, max: 80 },     // Realistic college football totals
+  CBB: { min: 110, max: 175 },   // Realistic college basketball totals
+};
+
+// Clamp projected total to realistic range for the sport
+function clampTotal(total: number, sport: string): number {
+  const range = TOTAL_SANITY_RANGES[sport as keyof typeof TOTAL_SANITY_RANGES];
+  if (!range) return total;
+  return Math.max(range.min, Math.min(range.max, total));
+}
+
 // Blend stats based on split type
 function blendTeamStats(
   homeStats: TeamStats | undefined,
@@ -332,10 +347,24 @@ export function generateProjection(
   const adjustedHomeScore = homeScore + (sosAdjustment / 2);
   
   // Calculate projections
-  const projectedTotal = adjustedAwayScore + adjustedHomeScore;
-  const projectedMargin = adjustedHomeScore - adjustedAwayScore;
+  const rawTotal = adjustedAwayScore + adjustedHomeScore;
   
-  // Fair lines
+  // Apply sanity check - clamp total to realistic range for the sport
+  const projectedTotal = clampTotal(rawTotal, sport);
+  
+  // If total was clamped, adjust scores proportionally
+  let finalAwayScore = adjustedAwayScore;
+  let finalHomeScore = adjustedHomeScore;
+  if (projectedTotal !== rawTotal && rawTotal > 0) {
+    const scaleFactor = projectedTotal / rawTotal;
+    finalAwayScore = adjustedAwayScore * scaleFactor;
+    finalHomeScore = adjustedHomeScore * scaleFactor;
+  }
+  
+  // Calculate margin using the final (possibly scaled) scores
+  const projectedMargin = finalHomeScore - finalAwayScore;
+  
+  // Fair lines - computed from final scores after any clamping
   const fairSpread = -projectedMargin; // Spread from home perspective
   const fairTotal = projectedTotal;
   
@@ -373,8 +402,8 @@ export function generateProjection(
   }
   
   return {
-    projectedAwayScore: Math.round(adjustedAwayScore * 10) / 10,
-    projectedHomeScore: Math.round(adjustedHomeScore * 10) / 10,
+    projectedAwayScore: Math.round(finalAwayScore * 10) / 10,
+    projectedHomeScore: Math.round(finalHomeScore * 10) / 10,
     projectedTotal: Math.round(projectedTotal * 10) / 10,
     projectedMargin: Math.round(projectedMargin * 10) / 10,
     fairSpread: Math.round(fairSpread * 10) / 10,

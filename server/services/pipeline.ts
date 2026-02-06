@@ -1,10 +1,11 @@
 import { storage } from "../storage";
 import { runScraper } from "./scrapers";
-import { generateProjection } from "./jobu-algorithm";
+import { generateProjection, createProjectionRecord, getConfidenceEnhanced, ALGORITHM_VERSIONS } from "./jobu-algorithm";
+import type { ProjectionResult } from "./jobu-algorithm";
 import { detectRlmFromLines } from "./rlm-detector";
 import { db } from "../db";
 import { games, teamStats, projections, opportunities, odds, rlmSignals, type Game, type TeamStats, type Odds } from "@shared/schema";
-import { eq, and, gte, lte, or, ilike, desc, inArray } from "drizzle-orm";
+import { eq, and, gte, lte, lt, or, ilike, desc, inArray } from "drizzle-orm";
 
 function oddsToProbability(americanOdds: number): number {
   if (americanOdds < 0) {
@@ -14,30 +15,30 @@ function oddsToProbability(americanOdds: number): number {
 }
 
 function calculateEdgePercentage(
-  marketLine: number, 
-  fairLine: number, 
+  marketLine: number,
+  fairLine: number,
   marketType: "spread" | "total",
   sport: string = "NFL",
   americanOdds: number = -110
 ): number {
   const diff = Math.abs(marketLine - fairLine);
-  
+
   const pointValues: Record<string, number> = {
     NFL: 0.01,
     NBA: 0.01,
     CFB: 0.008,
     CBB: 0.008,
   };
-  
-  const pointValue = marketType === "spread" 
-    ? (pointValues[sport] || 0.01) 
+
+  const pointValue = marketType === "spread"
+    ? (pointValues[sport] || 0.01)
     : 0.004;
-  
+
   const coverProb = Math.min(0.95, Math.max(0.05, 0.5 + (pointValue * diff)));
   const impliedProb = oddsToProbability(americanOdds);
-  
+
   const edge = (coverProb - impliedProb) * 100;
-  
+
   return Math.min(15, Math.max(0, edge));
 }
 
@@ -140,7 +141,7 @@ function normalizeTeamName(name: string): string {
 // Get all possible names for a team
 function getTeamNameVariants(teamName: string): string[] {
   const variants = [teamName];
-  
+
   // Check if this name is in aliases
   for (const [canonical, aliases] of Object.entries(TEAM_ALIASES)) {
     if (normalizeTeamName(canonical) === normalizeTeamName(teamName) ||
@@ -149,22 +150,22 @@ function getTeamNameVariants(teamName: string): string[] {
       break;
     }
   }
-  
+
   // Also add the last word (nickname)
   const lastWord = teamName.split(" ").pop() || "";
   if (lastWord && !variants.includes(lastWord)) {
     variants.push(lastWord);
   }
-  
+
   return Array.from(new Set(variants));
 }
 
 async function findTeamStats(teamName: string, sport: string, splitType: string): Promise<TeamStats | null> {
   const variants = getTeamNameVariants(teamName);
-  
+
   // Build OR conditions for all variants
   const conditions = variants.map(v => ilike(teamStats.teamName, `%${v}%`));
-  
+
   const stats = await db
     .select()
     .from(teamStats)
@@ -174,8 +175,39 @@ async function findTeamStats(teamName: string, sport: string, splitType: string)
       eq(teamStats.splitType, splitType)
     ))
     .limit(1);
-  
+
   return stats[0] || null;
+}
+
+// Find the most recent previous game for a team to calculate rest days
+async function findPreviousGame(teamName: string, sport: string, beforeDate: Date): Promise<Game | null> {
+  const variants = getTeamNameVariants(teamName);
+
+  // Look for games where this team played (home or away) before the given date
+  const homeConditions = variants.map(v => ilike(games.homeTeamName, `%${v}%`));
+  const awayConditions = variants.map(v => ilike(games.awayTeamName, `%${v}%`));
+
+  const previousGames = await db
+    .select()
+    .from(games)
+    .where(and(
+      lt(games.gameDate, beforeDate),
+      eq(games.sport, sport),
+      or(...homeConditions, ...awayConditions)
+    ))
+    .orderBy(desc(games.gameDate))
+    .limit(1);
+
+  return previousGames[0] || null;
+}
+
+// Calculate days of rest between games
+function calculateRestDays(previousGameDate: Date | null, currentGameDate: Date): number | null {
+  if (!previousGameDate) return null;
+  const diffMs = currentGameDate.getTime() - previousGameDate.getTime();
+  const diffDays = Math.floor(diffMs / (24 * 60 * 60 * 1000));
+  // 0 days = back-to-back, 1 day = normal rest, 2+ = extra rest
+  return Math.max(0, diffDays - 1); // Subtract 1 because same-day = 0 rest
 }
 
 
@@ -188,51 +220,51 @@ export async function runFullPipeline(
     opportunitiesCreated: 0,
     errors: [],
   };
-  
+
   console.log("Starting full pipeline...");
-  
+
   try {
     console.log("Step 1: Scraping schedules...");
     const scheduleResult = await runScraper("schedules", sports);
     result.gamesScraped = scheduleResult.recordsProcessed;
     console.log(`Scraped ${result.gamesScraped} games`);
-    
+
     if (!scheduleResult.success && scheduleResult.error) {
       result.errors.push(`Schedule scrape: ${scheduleResult.error}`);
     }
   } catch (error) {
     result.errors.push(`Schedule error: ${error instanceof Error ? error.message : "Unknown"}`);
   }
-  
+
   try {
     console.log("Step 1b: Scraping Covers odds...");
     const coversResult = await runScraper("covers", sports);
     console.log(`Scraped odds for ${coversResult.recordsProcessed} games from Covers`);
-    
+
     if (!coversResult.success && coversResult.error) {
       result.errors.push(`Covers scrape: ${coversResult.error}`);
     }
   } catch (error) {
     result.errors.push(`Covers error: ${error instanceof Error ? error.message : "Unknown"}`);
   }
-  
+
   try {
     console.log("Step 2: Getting today's games (Eastern timezone)...");
     // Use Eastern timezone (EST = UTC-5) for sports
     const now = new Date();
     const easternNow = new Date(now.getTime() - 5 * 60 * 60 * 1000);
-    
+
     // Get start of today in Eastern time (midnight Eastern)
     const todayEasternMidnight = new Date(easternNow);
     todayEasternMidnight.setUTCHours(0, 0, 0, 0);
-    
+
     // Convert Eastern midnight to UTC (add 5 hours)
     // Midnight Eastern = 5am UTC
     const todayStartUtc = new Date(todayEasternMidnight.getTime() + 5 * 60 * 60 * 1000);
     const todayEndUtc = new Date(todayStartUtc.getTime() + 24 * 60 * 60 * 1000);
-    
+
     console.log(`UTC range: ${todayStartUtc.toISOString()} to ${todayEndUtc.toISOString()}`);
-    
+
     const todaysGames = await db
       .select()
       .from(games)
@@ -240,7 +272,7 @@ export async function runFullPipeline(
         gte(games.gameDate, todayStartUtc),
         lte(games.gameDate, todayEndUtc)
       ));
-    
+
     console.log(`Found ${todaysGames.length} games for today (Eastern: ${easternNow.toISOString().split('T')[0]})`);
 
     // Clean stale projections, opportunities, and RLM signals for today's games
@@ -262,19 +294,36 @@ export async function runFullPipeline(
       console.log("Cleaned stale projections, opportunities, and RLM signals");
     }
 
-    console.log("Step 3: Generating projections...");
+    console.log("Step 3: Generating projections with enhanced algorithm...");
     for (const game of todaysGames) {
       try {
         const homeStats = await findTeamStats(game.homeTeamName, game.sport, "home");
         const awayStats = await findTeamStats(game.awayTeamName, game.sport, "away");
         const homeSeasonStats = await findTeamStats(game.homeTeamName, game.sport, "season");
         const awaySeasonStats = await findTeamStats(game.awayTeamName, game.sport, "season");
-        
+
         if (!homeStats && !awayStats && !homeSeasonStats && !awaySeasonStats) {
           console.warn(`Skipping ${game.awayTeamName} @ ${game.homeTeamName} — no team stats available. Upload stats via Excel or run the TeamRankings scraper first.`);
           continue;
         }
 
+        // Calculate rest days for NBA/CBB (back-to-back detection)
+        let homeRestDays: number | null = null;
+        let awayRestDays: number | null = null;
+
+        if (game.sport === "NBA" || game.sport === "CBB") {
+          const homePrevGame = await findPreviousGame(game.homeTeamName, game.sport, game.gameDate);
+          const awayPrevGame = await findPreviousGame(game.awayTeamName, game.sport, game.gameDate);
+
+          homeRestDays = calculateRestDays(homePrevGame?.gameDate || null, game.gameDate);
+          awayRestDays = calculateRestDays(awayPrevGame?.gameDate || null, game.gameDate);
+
+          if (homeRestDays !== null || awayRestDays !== null) {
+            console.log(`  Rest: ${game.homeTeamName} ${homeRestDays ?? "?"}d, ${game.awayTeamName} ${awayRestDays ?? "?"}d`);
+          }
+        }
+
+        // Generate enhanced projection with Four Factors + rest + pace-clash
         const projection = generateProjection(
           game,
           {
@@ -284,67 +333,79 @@ export async function runFullPipeline(
           {
             home: homeStats || undefined,
             season: homeSeasonStats || undefined,
+          },
+          {
+            homeRestDays,
+            awayRestDays,
+            isAwayTeamTraveling: true, // Away team is always traveling
           }
         );
-        
-        const algorithmVersion = `${game.sport} v${game.sport === "NFL" ? "4.0" : "3.5"}R1`;
-        
+
+        // Use createProjectionRecord to get properly formatted record with detailed metrics
+        const projRecord = createProjectionRecord(game.id, game.sport, projection);
+
         const [savedProjection] = await db
           .insert(projections)
-          .values({
-            gameId: game.id,
-            algorithmVersion,
-            projectedAwayScore: projection.projectedAwayScore,
-            projectedHomeScore: projection.projectedHomeScore,
-            projectedTotal: projection.projectedTotal,
-            projectedMargin: projection.projectedMargin,
-            fairSpread: projection.fairSpread,
-            fairTotal: projection.fairTotal,
-            volatilityScore: projection.volatilityScore,
-            drivers: projection.drivers,
-          })
+          .values(projRecord)
           .returning();
-        
+
         result.projectionsGenerated++;
-        
+
+        // Log enhanced projection details
+        const ffStr = projection.fourFactorsEdge
+          ? `4F: ${projection.fourFactorsEdge.totalEdge > 0 ? "+" : ""}${projection.fourFactorsEdge.totalEdge}pts`
+          : "4F: N/A";
+        const restStr = projection.restAdjustment.drivers.length > 0
+          ? `Rest: ${projection.restAdjustment.drivers[0]}`
+          : "";
+        console.log(`  ${game.awayTeamName} @ ${game.homeTeamName}: spread ${projection.fairSpread}, total ${projection.fairTotal}, vol ${projection.volatilityScore} | ${ffStr} ${restStr}`);
+
         console.log("Step 4: Creating opportunities...");
-        
+
         // Get latest odds (current lines)
         const [latestOdds] = await db.select().from(odds)
           .where(eq(odds.gameId, game.id))
           .orderBy(desc(odds.capturedAt))
           .limit(1);
-        
+
         // Get opening odds (earliest record or one marked as opening)
         const allOddsForGame = await db.select().from(odds)
           .where(eq(odds.gameId, game.id))
           .orderBy(odds.capturedAt);
-        
+
         // First try to find explicit opening odds, otherwise use earliest record
         const openingOdds = allOddsForGame.find(o => o.isOpening) || allOddsForGame[0] || null;
-        
-        const marketSpread = latestOdds?.spreadHome ? parseFloat(String(latestOdds.spreadHome)) : 
+
+        const marketSpread = latestOdds?.spreadHome ? parseFloat(String(latestOdds.spreadHome)) :
                             latestOdds?.spreadAway ? -parseFloat(String(latestOdds.spreadAway)) : null;
         const marketTotal = latestOdds?.totalOver ? parseFloat(String(latestOdds.totalOver)) : null;
-        
+
         // Get opening lines for RLM detection
-        const openingSpread = openingOdds?.spreadHome ? parseFloat(String(openingOdds.spreadHome)) : 
+        const openingSpread = openingOdds?.spreadHome ? parseFloat(String(openingOdds.spreadHome)) :
                               openingOdds?.spreadAway ? -parseFloat(String(openingOdds.spreadAway)) : null;
         const openingTotal = openingOdds?.totalOver ? parseFloat(String(openingOdds.totalOver)) : null;
-        
+
         if (marketSpread !== null) {
           const spreadResult = determineSpreadSide(marketSpread, projection.fairSpread);
           const spreadOdds = latestOdds?.spreadHomeOdds || -110;
           const edgePct = calculateEdgePercentage(marketSpread, projection.fairSpread, "spread", game.sport, spreadOdds);
-          const confidence = edgePct > 4 ? "High" : edgePct > 2.5 ? "Medium" : "Lean";
-          
+
+          // Use enhanced confidence from algorithm (considers Four Factors + kill switches)
+          const confidence = getConfidenceEnhanced(
+            edgePct,
+            projection.volatilityScore,
+            projection.fourFactorsEdge,
+            projection.killSwitches.length,
+            game.sport
+          );
+
           // Detect RLM using opening vs current line
           const spreadRlm = detectRlmFromLines(openingSpread, marketSpread, null, "spread");
-          
+
           if (edgePct > 1) {
             const teamName = spreadResult.side === "home" ? game.homeTeamName : game.awayTeamName;
             const displayLine = spreadResult.side === "home" ? marketSpread : -marketSpread;
-            
+
             await db.insert(opportunities).values({
               gameId: game.id,
               projectionId: savedProjection.id,
@@ -359,29 +420,35 @@ export async function runFullPipeline(
               confidence,
               volatilityScore: projection.volatilityScore,
               isReverseLineMovement: spreadRlm.isRlm,
-              drivers: spreadRlm.isRlm 
+              drivers: spreadRlm.isRlm
                 ? [...projection.drivers, `RLM detected (${spreadRlm.strength}): line moved ${spreadRlm.direction}`]
                 : projection.drivers,
+              killSwitches: projection.killSwitches.length > 0 ? projection.killSwitches : null,
               status: "active",
             });
-            
+
             result.opportunitiesCreated++;
           }
         } else {
-          // No market data available - skip creating opportunity 
-          // without real market vs fair comparison
           console.log(`No market spread data for ${game.awayTeamName} @ ${game.homeTeamName} - skipping spread opportunity`);
         }
-        
+
         if (marketTotal !== null) {
           const totalResult = determineTotalSide(marketTotal, projection.fairTotal);
           const totalOdds = latestOdds?.totalOverOdds || -110;
           const edgePct = calculateEdgePercentage(marketTotal, projection.fairTotal, "total", game.sport, totalOdds);
-          const confidence = edgePct > 3 ? "Medium" : "Lean";
-          
-          // Detect RLM using opening vs current total (openingTotal already fetched above)
+
+          const confidence = getConfidenceEnhanced(
+            edgePct,
+            projection.volatilityScore,
+            projection.fourFactorsEdge,
+            projection.killSwitches.length,
+            game.sport
+          );
+
+          // Detect RLM using opening vs current total
           const totalRlm = detectRlmFromLines(openingTotal, marketTotal, null, "total");
-          
+
           if (edgePct > 0.5) {
             await db.insert(opportunities).values({
               gameId: game.id,
@@ -397,28 +464,73 @@ export async function runFullPipeline(
               confidence,
               volatilityScore: projection.volatilityScore,
               isReverseLineMovement: totalRlm.isRlm,
-              drivers: totalRlm.isRlm 
+              drivers: totalRlm.isRlm
                 ? [`Projected total: ${projection.projectedTotal}`, `RLM detected (${totalRlm.strength}): line moved ${totalRlm.direction}`]
                 : [`Projected total: ${projection.projectedTotal}`],
+              killSwitches: projection.killSwitches.length > 0 ? projection.killSwitches : null,
               status: "active",
             });
-            
+
             result.opportunitiesCreated++;
           }
         } else {
-          // No market total data available - skip creating opportunity
           console.log(`No market total data for ${game.awayTeamName} @ ${game.homeTeamName} - skipping total opportunity`);
         }
-        
+
+        // Create 1H (first-half) opportunities if we have market data
+        if (marketSpread !== null && (game.sport === "NBA" || game.sport === "CBB")) {
+          // Estimate 1H market spread from full-game spread (sportsbooks typically offer these)
+          const fhSpreadRatio = game.sport === "NBA" ? 0.47 : 0.46;
+          const fhMarketSpread = marketSpread * fhSpreadRatio;
+          const fhEdge = Math.abs(projection.firstHalf.fairSpread - fhMarketSpread);
+          const fhEdgePct = fhEdge / Math.abs(fhMarketSpread || 1) * 100;
+
+          if (fhEdge >= 1.5 && fhEdgePct >= 3) {
+            const side = projection.firstHalf.fairSpread < fhMarketSpread ? "home" : "away";
+            const confidence = getConfidenceEnhanced(
+              fhEdgePct,
+              projection.volatilityScore + 5,
+              projection.fourFactorsEdge,
+              projection.killSwitches.length,
+              game.sport
+            );
+
+            const teamName = side === "home" ? game.homeTeamName : game.awayTeamName;
+            const displayLine = side === "home" ? fhMarketSpread : -fhMarketSpread;
+
+            await db.insert(opportunities).values({
+              gameId: game.id,
+              projectionId: savedProjection.id,
+              sport: game.sport,
+              marketType: "1h",
+              side,
+              playDescription: `1H ${teamName} ${displayLine > 0 ? "+" : ""}${Math.round(displayLine * 10) / 10}`,
+              currentLine: Math.round(displayLine * 10) / 10,
+              currentOdds: -110,
+              fairLine: projection.firstHalf.fairSpread,
+              edgePercentage: Math.round(fhEdgePct * 10) / 10,
+              confidence,
+              volatilityScore: projection.volatilityScore + 5,
+              isReverseLineMovement: false,
+              drivers: [...projection.drivers, "First-half play derived from full-game model"],
+              killSwitches: projection.killSwitches.length > 0 ? projection.killSwitches : null,
+              status: "active",
+            });
+
+            result.opportunitiesCreated++;
+            console.log(`  1H opportunity: ${teamName} ${displayLine > 0 ? "+" : ""}${Math.round(displayLine * 10) / 10} (${confidence})`);
+          }
+        }
+
       } catch (gameError) {
         result.errors.push(`Game ${game.id}: ${gameError instanceof Error ? gameError.message : "Unknown"}`);
       }
     }
-    
+
   } catch (error) {
     result.errors.push(`Pipeline error: ${error instanceof Error ? error.message : "Unknown"}`);
   }
-  
+
   console.log(`Pipeline complete: ${result.gamesScraped} games, ${result.projectionsGenerated} projections, ${result.opportunitiesCreated} opportunities`);
 
   // Save pipeline status for the dashboard
@@ -450,16 +562,16 @@ export async function importExcelAndProcess(buffer: Buffer, filename: string): P
 }> {
   const { parseExcelFile } = await import("./excel-parser");
   const result = await parseExcelFile(buffer, filename);
-  
+
   let statsImported = 0;
   const teamsImported = new Set<string>();
-  
+
   for (const stat of result.stats) {
     await storage.upsertTeamStats(stat);
     teamsImported.add(stat.teamName);
     statsImported++;
   }
-  
+
   // Auto-refresh projections after Excel upload
   if (statsImported > 0) {
     console.log("Excel import complete, triggering projection refresh...");
@@ -473,7 +585,7 @@ export async function importExcelAndProcess(buffer: Buffer, filename: string): P
       }
     }
   }
-  
+
   return {
     teamsImported: teamsImported.size,
     statsImported,

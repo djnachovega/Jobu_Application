@@ -27,6 +27,8 @@ import {
   type InsertDataSource,
   type PatternDiscovery,
   type InsertPatternDiscovery,
+  type UserSetting,
+  type InsertUserSetting,
   users,
   teams,
   games,
@@ -40,6 +42,7 @@ import {
   backtestResults,
   dataSources,
   patternDiscoveries,
+  userSettings,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -108,6 +111,11 @@ export interface IStorage {
   // Pattern Discoveries
   getPatternDiscoveries(filters?: { sports?: string[]; active?: boolean }): Promise<PatternDiscovery[]>;
   createPatternDiscovery(pattern: InsertPatternDiscovery): Promise<PatternDiscovery>;
+
+  // User Settings
+  getAllSettings(): Promise<UserSetting[]>;
+  getSetting(key: string): Promise<UserSetting | undefined>;
+  upsertSetting(key: string, value: string): Promise<UserSetting>;
 
   // Dashboard Stats
   getDashboardStats(sports?: string[]): Promise<{
@@ -609,6 +617,29 @@ export class DatabaseStorage implements IStorage {
 
   async createPatternDiscovery(pattern: InsertPatternDiscovery): Promise<PatternDiscovery> {
     const [created] = await db.insert(patternDiscoveries).values(pattern).returning();
+    return created;
+  }
+
+  // User Settings
+  async getAllSettings(): Promise<UserSetting[]> {
+    return db.select().from(userSettings);
+  }
+
+  async getSetting(key: string): Promise<UserSetting | undefined> {
+    const [setting] = await db.select().from(userSettings).where(eq(userSettings.key, key));
+    return setting;
+  }
+
+  async upsertSetting(key: string, value: string): Promise<UserSetting> {
+    const existing = await this.getSetting(key);
+    if (existing) {
+      const [updated] = await db.update(userSettings)
+        .set({ value, updatedAt: new Date() })
+        .where(eq(userSettings.key, key))
+        .returning();
+      return updated;
+    }
+    const [created] = await db.insert(userSettings).values({ key, value }).returning();
     return created;
   }
 

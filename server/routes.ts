@@ -268,21 +268,58 @@ export async function registerRoutes(
   });
 
   // Full Pipeline - scrape schedules, generate projections, create opportunities
+  let pipelineRunning = false;
+
   app.post("/api/pipeline/run", async (req: Request, res: Response) => {
     try {
+      if (pipelineRunning) {
+        return res.json({ message: "Pipeline already running", status: "running" });
+      }
+
       const sports = req.body.sports || ["NFL", "NBA", "CFB", "CBB"];
-      
+      pipelineRunning = true;
+
+      await storage.upsertSetting("pipeline_status", "running");
+      await storage.upsertSetting("pipeline_last_run", new Date().toISOString());
+
       res.json({ message: "Pipeline started", sports });
-      
+
       // Run pipeline in background
       runFullPipeline(sports).then(result => {
+        pipelineRunning = false;
         console.log("Pipeline complete:", result);
-      }).catch(err => {
+      }).catch(async (err) => {
+        pipelineRunning = false;
         console.error("Pipeline error:", err);
+        try {
+          await storage.upsertSetting("pipeline_status", "error");
+          await storage.upsertSetting("pipeline_errors", JSON.stringify([err instanceof Error ? err.message : "Unknown error"]));
+        } catch (_) {}
       });
     } catch (error) {
+      pipelineRunning = false;
       console.error("Error starting pipeline:", error);
       res.status(500).json({ error: "Failed to start pipeline" });
+    }
+  });
+
+  // Pipeline status - lets the dashboard know when refresh completed
+  app.get("/api/pipeline/status", async (req: Request, res: Response) => {
+    try {
+      const lastRun = await storage.getSetting("pipeline_last_run");
+      const status = await storage.getSetting("pipeline_status");
+      const summary = await storage.getSetting("pipeline_summary");
+      const errors = await storage.getSetting("pipeline_errors");
+
+      res.json({
+        lastRun: lastRun?.value || null,
+        status: pipelineRunning ? "running" : (status?.value || "idle"),
+        summary: summary?.value ? JSON.parse(summary.value) : null,
+        errors: errors?.value ? JSON.parse(errors.value) : [],
+      });
+    } catch (error) {
+      console.error("Error fetching pipeline status:", error);
+      res.status(500).json({ error: "Failed to fetch pipeline status" });
     }
   });
 
@@ -534,6 +571,34 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error analyzing game patterns:", error);
       res.status(500).json({ error: "Failed to analyze game patterns" });
+    }
+  });
+
+  // User Settings
+  app.get("/api/settings", async (req: Request, res: Response) => {
+    try {
+      const settings = await storage.getAllSettings();
+      const settingsMap: Record<string, string> = {};
+      for (const s of settings) {
+        settingsMap[s.key] = s.value;
+      }
+      res.json(settingsMap);
+    } catch (error) {
+      console.error("Error fetching settings:", error);
+      res.status(500).json({ error: "Failed to fetch settings" });
+    }
+  });
+
+  app.put("/api/settings", async (req: Request, res: Response) => {
+    try {
+      const settings = req.body as Record<string, string>;
+      for (const [key, value] of Object.entries(settings)) {
+        await storage.upsertSetting(key, String(value));
+      }
+      res.json({ message: "Settings saved" });
+    } catch (error) {
+      console.error("Error saving settings:", error);
+      res.status(500).json({ error: "Failed to save settings" });
     }
   });
 

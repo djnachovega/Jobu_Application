@@ -3,111 +3,8 @@ import { runScraper } from "./scrapers";
 import { generateProjection } from "./jobu-algorithm";
 import { detectRlmFromLines } from "./rlm-detector";
 import { db } from "../db";
-import { games, teamStats, projections, opportunities, odds, type Game, type TeamStats, type Odds, type Opportunity } from "@shared/schema";
-import { eq, and, gte, lte, or, ilike, desc, lt } from "drizzle-orm";
-
-// Find existing opportunity by game, market type, and side
-async function findExistingOpportunity(
-  gameId: number, 
-  marketType: string, 
-  side: string
-): Promise<Opportunity | null> {
-  const [existing] = await db.select().from(opportunities)
-    .where(and(
-      eq(opportunities.gameId, gameId),
-      eq(opportunities.marketType, marketType),
-      eq(opportunities.side, side),
-      eq(opportunities.status, "active")
-    ))
-    .limit(1);
-  return existing || null;
-}
-
-// Upsert opportunity - update if exists, insert if not
-// Also removes opposite side opportunities when side changes
-async function upsertOpportunity(oppData: {
-  gameId: number;
-  projectionId: number;
-  sport: string;
-  marketType: string;
-  side: string;
-  playDescription: string;
-  currentLine: number;
-  currentOdds: number;
-  fairLine: number;
-  edgePercentage: number;
-  confidence: string;
-  volatilityScore: number;
-  isReverseLineMovement: boolean;
-  drivers: string[];
-}): Promise<{ isNew: boolean }> {
-  // First, expire any opposite side opportunity for this game/market
-  const oppositeSide = oppData.marketType === "total" 
-    ? (oppData.side === "over" ? "under" : "over")
-    : (oppData.side === "home" ? "away" : "home");
-  
-  const oppositeOpp = await findExistingOpportunity(oppData.gameId, oppData.marketType, oppositeSide);
-  if (oppositeOpp) {
-    await db.update(opportunities)
-      .set({ status: "expired", updatedAt: new Date() })
-      .where(eq(opportunities.id, oppositeOpp.id));
-  }
-  
-  const existing = await findExistingOpportunity(oppData.gameId, oppData.marketType, oppData.side);
-  
-  if (existing) {
-    // Update existing opportunity with latest data
-    await db.update(opportunities)
-      .set({
-        projectionId: oppData.projectionId,
-        playDescription: oppData.playDescription,
-        currentLine: oppData.currentLine,
-        currentOdds: oppData.currentOdds,
-        fairLine: oppData.fairLine,
-        edgePercentage: oppData.edgePercentage,
-        confidence: oppData.confidence,
-        volatilityScore: oppData.volatilityScore,
-        isReverseLineMovement: oppData.isReverseLineMovement,
-        drivers: oppData.drivers,
-        updatedAt: new Date(),
-      })
-      .where(eq(opportunities.id, existing.id));
-    return { isNew: false };
-  }
-  
-  // Insert new opportunity
-  await db.insert(opportunities).values({
-    ...oppData,
-    status: "active",
-  });
-  return { isNew: true };
-}
-
-// Clean up stale opportunities for games that have passed
-async function cleanupStaleOpportunities(): Promise<number> {
-  const now = new Date();
-  
-  // Get all active opportunities for games that have already started
-  const staleOpps = await db.select({ oppId: opportunities.id })
-    .from(opportunities)
-    .leftJoin(games, eq(opportunities.gameId, games.id))
-    .where(and(
-      eq(opportunities.status, "active"),
-      lt(games.gameDate, now)
-    ));
-  
-  if (staleOpps.length > 0) {
-    const staleIds = staleOpps.map(o => o.oppId);
-    for (const id of staleIds) {
-      await db.update(opportunities)
-        .set({ status: "expired", updatedAt: new Date() })
-        .where(eq(opportunities.id, id));
-    }
-    console.log(`Marked ${staleOpps.length} opportunities as expired (games already started)`);
-  }
-  
-  return staleOpps.length;
-}
+import { games, teamStats, projections, opportunities, odds, rlmSignals, type Game, type TeamStats, type Odds } from "@shared/schema";
+import { eq, and, gte, lte, or, ilike, desc, inArray } from "drizzle-orm";
 
 function oddsToProbability(americanOdds: number): number {
   if (americanOdds < 0) {
@@ -281,47 +178,6 @@ async function findTeamStats(teamName: string, sport: string, splitType: string)
   return stats[0] || null;
 }
 
-// Sport-specific default projections
-const SPORT_DEFAULTS = {
-  NFL: { baseTotal: 45, variance: 8, marginRange: 7 },
-  CFB: { baseTotal: 48, variance: 10, marginRange: 10 },
-  NBA: { baseTotal: 225, variance: 12, marginRange: 6 },
-  CBB: { baseTotal: 140, variance: 10, marginRange: 8 },  // Realistic college basketball total
-};
-
-function generateMockProjection(game: Game): {
-  projectedAwayScore: number;
-  projectedHomeScore: number;
-  projectedTotal: number;
-  projectedMargin: number;
-  fairSpread: number;
-  fairTotal: number;
-  volatilityScore: number;
-  drivers: string[];
-} {
-  const defaults = SPORT_DEFAULTS[game.sport as keyof typeof SPORT_DEFAULTS] || SPORT_DEFAULTS.NBA;
-  
-  // Generate realistic projections based on sport
-  const projectedTotal = defaults.baseTotal + (Math.random() - 0.5) * defaults.variance * 2;
-  const margin = (Math.random() - 0.5) * defaults.marginRange * 2;
-  const projectedHomeScore = (projectedTotal + margin) / 2;
-  const projectedAwayScore = (projectedTotal - margin) / 2;
-  
-  return {
-    projectedAwayScore: Math.round(projectedAwayScore * 10) / 10,
-    projectedHomeScore: Math.round(projectedHomeScore * 10) / 10,
-    projectedTotal: Math.round(projectedTotal * 10) / 10,
-    projectedMargin: Math.round(margin * 10) / 10,
-    fairSpread: Math.round(-margin * 10) / 10,
-    fairTotal: Math.round(projectedTotal * 10) / 10,
-    volatilityScore: Math.floor(Math.random() * 40) + 30,
-    drivers: [
-      `${game.homeTeamName} home advantage`,
-      "Historical trends favor this matchup",
-      "Recent form analysis",
-    ],
-  };
-}
 
 export async function runFullPipeline(
   sports: string[] = ["NFL", "NBA", "CFB", "CBB"]
@@ -334,17 +190,6 @@ export async function runFullPipeline(
   };
   
   console.log("Starting full pipeline...");
-  
-  // Step 0: Clean up stale opportunities from past games
-  try {
-    console.log("Step 0: Cleaning up stale opportunities...");
-    const expiredCount = await cleanupStaleOpportunities();
-    if (expiredCount > 0) {
-      console.log(`Expired ${expiredCount} opportunities for past games`);
-    }
-  } catch (error) {
-    result.errors.push(`Cleanup error: ${error instanceof Error ? error.message : "Unknown"}`);
-  }
   
   try {
     console.log("Step 1: Scraping schedules...");
@@ -397,7 +242,26 @@ export async function runFullPipeline(
       ));
     
     console.log(`Found ${todaysGames.length} games for today (Eastern: ${easternNow.toISOString().split('T')[0]})`);
-    
+
+    // Clean stale projections, opportunities, and RLM signals for today's games
+    // so re-runs don't create duplicates
+    if (todaysGames.length > 0) {
+      const gameIds = todaysGames.map(g => g.id);
+      console.log("Cleaning stale data for today's games...");
+
+      const deletedOpps = await db.delete(opportunities)
+        .where(and(
+          inArray(opportunities.gameId, gameIds),
+          eq(opportunities.status, "active")
+        ));
+      const deletedProjs = await db.delete(projections)
+        .where(inArray(projections.gameId, gameIds));
+      const deletedRlm = await db.delete(rlmSignals)
+        .where(inArray(rlmSignals.gameId, gameIds));
+
+      console.log("Cleaned stale projections, opportunities, and RLM signals");
+    }
+
     console.log("Step 3: Generating projections...");
     for (const game of todaysGames) {
       try {
@@ -406,23 +270,22 @@ export async function runFullPipeline(
         const homeSeasonStats = await findTeamStats(game.homeTeamName, game.sport, "season");
         const awaySeasonStats = await findTeamStats(game.awayTeamName, game.sport, "season");
         
-        let projection;
-        
-        if (homeStats || awayStats || homeSeasonStats || awaySeasonStats) {
-          projection = generateProjection(
-            game, 
-            {
-              away: awayStats || undefined,
-              season: awaySeasonStats || undefined,
-            },
-            {
-              home: homeStats || undefined,
-              season: homeSeasonStats || undefined,
-            }
-          );
-        } else {
-          projection = generateMockProjection(game);
+        if (!homeStats && !awayStats && !homeSeasonStats && !awaySeasonStats) {
+          console.warn(`Skipping ${game.awayTeamName} @ ${game.homeTeamName} — no team stats available. Upload stats via Excel or run the TeamRankings scraper first.`);
+          continue;
         }
+
+        const projection = generateProjection(
+          game,
+          {
+            away: awayStats || undefined,
+            season: awaySeasonStats || undefined,
+          },
+          {
+            home: homeStats || undefined,
+            season: homeSeasonStats || undefined,
+          }
+        );
         
         const algorithmVersion = `${game.sport} v${game.sport === "NFL" ? "4.0" : "3.5"}R1`;
         
@@ -482,8 +345,7 @@ export async function runFullPipeline(
             const teamName = spreadResult.side === "home" ? game.homeTeamName : game.awayTeamName;
             const displayLine = spreadResult.side === "home" ? marketSpread : -marketSpread;
             
-            // Use upsert to update existing or create new opportunity
-            const { isNew } = await upsertOpportunity({
+            await db.insert(opportunities).values({
               gameId: game.id,
               projectionId: savedProjection.id,
               sport: game.sport,
@@ -500,12 +362,15 @@ export async function runFullPipeline(
               drivers: spreadRlm.isRlm 
                 ? [...projection.drivers, `RLM detected (${spreadRlm.strength}): line moved ${spreadRlm.direction}`]
                 : projection.drivers,
+              status: "active",
             });
             
-            if (isNew) result.opportunitiesCreated++;
+            result.opportunitiesCreated++;
           }
         } else {
-          console.log(`No market spread data for ${game.awayTeamName} @ ${game.homeTeamName} - skipping`);
+          // No market data available - skip creating opportunity 
+          // without real market vs fair comparison
+          console.log(`No market spread data for ${game.awayTeamName} @ ${game.homeTeamName} - skipping spread opportunity`);
         }
         
         if (marketTotal !== null) {
@@ -514,12 +379,11 @@ export async function runFullPipeline(
           const edgePct = calculateEdgePercentage(marketTotal, projection.fairTotal, "total", game.sport, totalOdds);
           const confidence = edgePct > 3 ? "Medium" : "Lean";
           
-          // Detect RLM using opening vs current total
+          // Detect RLM using opening vs current total (openingTotal already fetched above)
           const totalRlm = detectRlmFromLines(openingTotal, marketTotal, null, "total");
           
           if (edgePct > 0.5) {
-            // Use upsert to update existing or create new opportunity
-            const { isNew } = await upsertOpportunity({
+            await db.insert(opportunities).values({
               gameId: game.id,
               projectionId: savedProjection.id,
               sport: game.sport,
@@ -536,12 +400,14 @@ export async function runFullPipeline(
               drivers: totalRlm.isRlm 
                 ? [`Projected total: ${projection.projectedTotal}`, `RLM detected (${totalRlm.strength}): line moved ${totalRlm.direction}`]
                 : [`Projected total: ${projection.projectedTotal}`],
+              status: "active",
             });
             
-            if (isNew) result.opportunitiesCreated++;
+            result.opportunitiesCreated++;
           }
         } else {
-          console.log(`No market total data for ${game.awayTeamName} @ ${game.homeTeamName} - skipping`);
+          // No market total data available - skip creating opportunity
+          console.log(`No market total data for ${game.awayTeamName} @ ${game.homeTeamName} - skipping total opportunity`);
         }
         
       } catch (gameError) {
@@ -554,7 +420,26 @@ export async function runFullPipeline(
   }
   
   console.log(`Pipeline complete: ${result.gamesScraped} games, ${result.projectionsGenerated} projections, ${result.opportunitiesCreated} opportunities`);
-  
+
+  // Save pipeline status for the dashboard
+  try {
+    await storage.upsertSetting("pipeline_last_run", new Date().toISOString());
+    await storage.upsertSetting("pipeline_status", result.errors.length > 0 ? "completed_with_errors" : "success");
+    await storage.upsertSetting("pipeline_summary", JSON.stringify({
+      gamesScraped: result.gamesScraped,
+      projectionsGenerated: result.projectionsGenerated,
+      opportunitiesCreated: result.opportunitiesCreated,
+      errorCount: result.errors.length,
+    }));
+    if (result.errors.length > 0) {
+      await storage.upsertSetting("pipeline_errors", JSON.stringify(result.errors.slice(0, 5)));
+    } else {
+      await storage.upsertSetting("pipeline_errors", "[]");
+    }
+  } catch (e) {
+    console.error("Failed to save pipeline status:", e);
+  }
+
   return result;
 }
 

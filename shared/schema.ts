@@ -331,6 +331,18 @@ export const insertPatternDiscoverySchema = createInsertSchema(patternDiscoverie
 export type InsertPatternDiscovery = z.infer<typeof insertPatternDiscoverySchema>;
 export type PatternDiscovery = typeof patternDiscoveries.$inferSelect;
 
+// User settings table - persisted app preferences
+export const userSettings = pgTable("user_settings", {
+  id: serial("id").primaryKey(),
+  key: text("key").notNull().unique(),
+  value: text("value").notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const insertUserSettingSchema = createInsertSchema(userSettings).omit({ id: true, updatedAt: true });
+export type InsertUserSetting = z.infer<typeof insertUserSettingSchema>;
+export type UserSetting = typeof userSettings.$inferSelect;
+
 // Relations
 export const gamesRelations = relations(games, ({ one, many }) => ({
   awayTeam: one(teams, { fields: [games.awayTeamId], references: [teams.id] }),

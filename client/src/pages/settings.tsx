@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,13 +13,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useTheme } from "@/components/theme-provider";
-import { Save, RefreshCw, Bell, Clock, Palette } from "lucide-react";
+import { Save, RefreshCw, Bell, Clock, Palette, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
 
 export function SettingsPage() {
   const { theme, setTheme } = useTheme();
   const { toast } = useToast();
-  
+  const queryClient = useQueryClient();
+
   const [refreshInterval, setRefreshInterval] = useState("15");
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [notifications, setNotifications] = useState(true);
@@ -27,12 +30,60 @@ export function SettingsPage() {
   const [minEdge, setMinEdge] = useState("3");
   const [maxVolatility, setMaxVolatility] = useState("65");
 
+  const { data: savedSettings, isLoading } = useQuery<Record<string, string>>({
+    queryKey: ["/api/settings"],
+  });
+
+  useEffect(() => {
+    if (savedSettings) {
+      if (savedSettings.refreshInterval) setRefreshInterval(savedSettings.refreshInterval);
+      if (savedSettings.autoRefresh) setAutoRefresh(savedSettings.autoRefresh === "true");
+      if (savedSettings.notifications) setNotifications(savedSettings.notifications === "true");
+      if (savedSettings.highConfOnly) setHighConfOnly(savedSettings.highConfOnly === "true");
+      if (savedSettings.minEdge) setMinEdge(savedSettings.minEdge);
+      if (savedSettings.maxVolatility) setMaxVolatility(savedSettings.maxVolatility);
+    }
+  }, [savedSettings]);
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("PUT", "/api/settings", {
+        refreshInterval,
+        autoRefresh: String(autoRefresh),
+        notifications: String(notifications),
+        highConfOnly: String(highConfOnly),
+        minEdge,
+        maxVolatility,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
+      toast({
+        title: "Settings Saved",
+        description: "Your preferences have been updated successfully.",
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Error",
+        description: "Failed to save settings. Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
   const handleSave = () => {
-    toast({
-      title: "Settings Saved",
-      description: "Your preferences have been updated successfully.",
-    });
+    saveMutation.mutate();
   };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 max-w-3xl" data-testid="settings-page">
@@ -202,8 +253,12 @@ export function SettingsPage() {
       </Card>
 
       <div className="flex justify-end">
-        <Button onClick={handleSave} data-testid="button-save-settings">
-          <Save className="h-4 w-4 mr-2" />
+        <Button onClick={handleSave} disabled={saveMutation.isPending} data-testid="button-save-settings">
+          {saveMutation.isPending ? (
+            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+          ) : (
+            <Save className="h-4 w-4 mr-2" />
+          )}
           Save Settings
         </Button>
       </div>

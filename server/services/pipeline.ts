@@ -178,39 +178,6 @@ async function findTeamStats(teamName: string, sport: string, splitType: string)
   return stats[0] || null;
 }
 
-function generateMockProjection(game: Game): {
-  projectedAwayScore: number;
-  projectedHomeScore: number;
-  projectedTotal: number;
-  projectedMargin: number;
-  fairSpread: number;
-  fairTotal: number;
-  volatilityScore: number;
-  drivers: string[];
-} {
-  const baseTotal = game.sport === "NFL" || game.sport === "CFB" ? 45 : 215;
-  const variance = game.sport === "NFL" || game.sport === "CFB" ? 8 : 15;
-  
-  const projectedTotal = baseTotal + (Math.random() - 0.5) * variance * 2;
-  const margin = (Math.random() - 0.5) * 10;
-  const projectedHomeScore = (projectedTotal + margin) / 2;
-  const projectedAwayScore = (projectedTotal - margin) / 2;
-  
-  return {
-    projectedAwayScore: Math.round(projectedAwayScore * 10) / 10,
-    projectedHomeScore: Math.round(projectedHomeScore * 10) / 10,
-    projectedTotal: Math.round(projectedTotal * 10) / 10,
-    projectedMargin: Math.round(margin * 10) / 10,
-    fairSpread: Math.round(-margin * 10) / 10,
-    fairTotal: Math.round(projectedTotal * 10) / 10,
-    volatilityScore: Math.floor(Math.random() * 40) + 30,
-    drivers: [
-      `${game.homeTeamName} home advantage`,
-      "Historical trends favor this matchup",
-      "Recent form analysis",
-    ],
-  };
-}
 
 export async function runFullPipeline(
   sports: string[] = ["NFL", "NBA", "CFB", "CBB"]
@@ -284,23 +251,22 @@ export async function runFullPipeline(
         const homeSeasonStats = await findTeamStats(game.homeTeamName, game.sport, "season");
         const awaySeasonStats = await findTeamStats(game.awayTeamName, game.sport, "season");
         
-        let projection;
-        
-        if (homeStats || awayStats || homeSeasonStats || awaySeasonStats) {
-          projection = generateProjection(
-            game, 
-            {
-              away: awayStats || undefined,
-              season: awaySeasonStats || undefined,
-            },
-            {
-              home: homeStats || undefined,
-              season: homeSeasonStats || undefined,
-            }
-          );
-        } else {
-          projection = generateMockProjection(game);
+        if (!homeStats && !awayStats && !homeSeasonStats && !awaySeasonStats) {
+          console.warn(`Skipping ${game.awayTeamName} @ ${game.homeTeamName} — no team stats available. Upload stats via Excel or run the TeamRankings scraper first.`);
+          continue;
         }
+
+        const projection = generateProjection(
+          game,
+          {
+            away: awayStats || undefined,
+            season: awaySeasonStats || undefined,
+          },
+          {
+            home: homeStats || undefined,
+            season: homeSeasonStats || undefined,
+          }
+        );
         
         const algorithmVersion = `${game.sport} v${game.sport === "NFL" ? "4.0" : "3.5"}R1`;
         

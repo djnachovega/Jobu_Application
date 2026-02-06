@@ -537,6 +537,34 @@ export async function registerRoutes(
     }
   });
 
+  // User Settings
+  app.get("/api/settings", async (req: Request, res: Response) => {
+    try {
+      const settings = await storage.getAllSettings();
+      const settingsMap: Record<string, string> = {};
+      for (const s of settings) {
+        settingsMap[s.key] = s.value;
+      }
+      res.json(settingsMap);
+    } catch (error) {
+      console.error("Error fetching settings:", error);
+      res.status(500).json({ error: "Failed to fetch settings" });
+    }
+  });
+
+  app.put("/api/settings", async (req: Request, res: Response) => {
+    try {
+      const settings = req.body as Record<string, string>;
+      for (const [key, value] of Object.entries(settings)) {
+        await storage.upsertSetting(key, String(value));
+      }
+      res.json({ message: "Settings saved" });
+    } catch (error) {
+      console.error("Error saving settings:", error);
+      res.status(500).json({ error: "Failed to save settings" });
+    }
+  });
+
   // Algorithm info
   app.get("/api/algorithms", async (req: Request, res: Response) => {
     try {

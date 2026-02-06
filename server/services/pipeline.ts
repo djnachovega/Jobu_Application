@@ -3,8 +3,8 @@ import { runScraper } from "./scrapers";
 import { generateProjection } from "./jobu-algorithm";
 import { detectRlmFromLines } from "./rlm-detector";
 import { db } from "../db";
-import { games, teamStats, projections, opportunities, odds, type Game, type TeamStats, type Odds } from "@shared/schema";
-import { eq, and, gte, lte, or, ilike, desc } from "drizzle-orm";
+import { games, teamStats, projections, opportunities, odds, rlmSignals, type Game, type TeamStats, type Odds } from "@shared/schema";
+import { eq, and, gte, lte, or, ilike, desc, inArray } from "drizzle-orm";
 
 function oddsToProbability(americanOdds: number): number {
   if (americanOdds < 0) {
@@ -242,7 +242,26 @@ export async function runFullPipeline(
       ));
     
     console.log(`Found ${todaysGames.length} games for today (Eastern: ${easternNow.toISOString().split('T')[0]})`);
-    
+
+    // Clean stale projections, opportunities, and RLM signals for today's games
+    // so re-runs don't create duplicates
+    if (todaysGames.length > 0) {
+      const gameIds = todaysGames.map(g => g.id);
+      console.log("Cleaning stale data for today's games...");
+
+      const deletedOpps = await db.delete(opportunities)
+        .where(and(
+          inArray(opportunities.gameId, gameIds),
+          eq(opportunities.status, "active")
+        ));
+      const deletedProjs = await db.delete(projections)
+        .where(inArray(projections.gameId, gameIds));
+      const deletedRlm = await db.delete(rlmSignals)
+        .where(inArray(rlmSignals.gameId, gameIds));
+
+      console.log("Cleaned stale projections, opportunities, and RLM signals");
+    }
+
     console.log("Step 3: Generating projections...");
     for (const game of todaysGames) {
       try {
@@ -401,7 +420,26 @@ export async function runFullPipeline(
   }
   
   console.log(`Pipeline complete: ${result.gamesScraped} games, ${result.projectionsGenerated} projections, ${result.opportunitiesCreated} opportunities`);
-  
+
+  // Save pipeline status for the dashboard
+  try {
+    await storage.upsertSetting("pipeline_last_run", new Date().toISOString());
+    await storage.upsertSetting("pipeline_status", result.errors.length > 0 ? "completed_with_errors" : "success");
+    await storage.upsertSetting("pipeline_summary", JSON.stringify({
+      gamesScraped: result.gamesScraped,
+      projectionsGenerated: result.projectionsGenerated,
+      opportunitiesCreated: result.opportunitiesCreated,
+      errorCount: result.errors.length,
+    }));
+    if (result.errors.length > 0) {
+      await storage.upsertSetting("pipeline_errors", JSON.stringify(result.errors.slice(0, 5)));
+    } else {
+      await storage.upsertSetting("pipeline_errors", "[]");
+    }
+  } catch (e) {
+    console.error("Failed to save pipeline status:", e);
+  }
+
   return result;
 }
 

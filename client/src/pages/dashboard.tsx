@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { StatsCard } from "@/components/stats-card";
 import { OpportunityCard } from "@/components/opportunity-card";
@@ -8,13 +8,16 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { 
-  Target, 
-  TrendingUp, 
-  DollarSign, 
+import {
+  Target,
+  TrendingUp,
+  DollarSign,
   Calendar,
   RefreshCw,
-  ArrowRight
+  ArrowRight,
+  CheckCircle2,
+  AlertCircle,
+  Clock
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -37,12 +40,72 @@ interface GameWithOdds extends Game {
   opportunityCount?: number;
 }
 
+interface PipelineStatus {
+  lastRun: string | null;
+  status: string;
+  summary: {
+    gamesScraped: number;
+    projectionsGenerated: number;
+    opportunitiesCreated: number;
+    errorCount: number;
+  } | null;
+  errors: string[];
+}
+
+function formatTimeAgo(dateStr: string): string {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMin = Math.floor(diffMs / 60000);
+
+  if (diffMin < 1) return "just now";
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHrs = Math.floor(diffMin / 60);
+  if (diffHrs < 24) return `${diffHrs}h ago`;
+  return `${Math.floor(diffHrs / 24)}d ago`;
+}
+
 export function Dashboard({ activeSports }: DashboardProps) {
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const sportsParam = activeSports.length > 0 ? `?sports=${activeSports.join(",")}` : "";
-  
+
+  // Pipeline status polling
+  const { data: pipelineStatus } = useQuery<PipelineStatus>({
+    queryKey: ["/api/pipeline/status"],
+    refetchInterval: isRefreshing ? 3000 : 60000,
+  });
+
+  // When pipeline finishes while we're waiting, refresh all data
+  useEffect(() => {
+    if (isRefreshing && pipelineStatus?.status && pipelineStatus.status !== "running") {
+      setIsRefreshing(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/opportunities"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/games/today"] });
+
+      if (pipelineStatus.status === "success") {
+        toast({
+          title: "Refresh Complete",
+          description: `${pipelineStatus.summary?.projectionsGenerated ?? 0} projections, ${pipelineStatus.summary?.opportunitiesCreated ?? 0} opportunities found.`,
+        });
+      } else if (pipelineStatus.status === "error") {
+        toast({
+          title: "Refresh Failed",
+          description: pipelineStatus.errors?.[0] || "Unknown error",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Refresh Complete",
+          description: "Dashboard updated with latest data.",
+        });
+      }
+    }
+  }, [pipelineStatus?.status, isRefreshing]);
+
   const refreshMutation = useMutation({
     mutationFn: async () => {
       setIsRefreshing(true);
@@ -51,25 +114,15 @@ export function Dashboard({ activeSports }: DashboardProps) {
     onSuccess: () => {
       toast({
         title: "Refreshing Data",
-        description: "Fetching latest odds from Covers.com. This may take 30-60 seconds.",
+        description: "Fetching latest schedules and odds. This may take 30-60 seconds.",
       });
-      // Poll for updates after a delay
-      setTimeout(() => {
-        queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/opportunities"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/games/today"] });
-        setIsRefreshing(false);
-        toast({
-          title: "Refresh Complete",
-          description: "Dashboard updated with latest data.",
-        });
-      }, 35000);
+      // Status polling (via refetchInterval above) will detect completion
     },
     onError: () => {
       setIsRefreshing(false);
       toast({
         title: "Refresh Failed",
-        description: "Could not refresh data. Please try again.",
+        description: "Could not start pipeline. Please try again.",
         variant: "destructive",
       });
     },
@@ -115,12 +168,39 @@ export function Dashboard({ activeSports }: DashboardProps) {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Dashboard</h1>
-          <p className="text-sm text-muted-foreground">
-            Today's betting opportunities and analysis
-          </p>
+          <div className="flex items-center gap-2 mt-1">
+            <p className="text-sm text-muted-foreground">
+              Today's betting opportunities and analysis
+            </p>
+            {pipelineStatus?.lastRun && (
+              <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                {pipelineStatus.status === "running" ? (
+                  <>
+                    <RefreshCw className="h-3 w-3 animate-spin" />
+                    <span>Updating...</span>
+                  </>
+                ) : pipelineStatus.status === "success" ? (
+                  <>
+                    <CheckCircle2 className="h-3 w-3 text-green-500" />
+                    <span>Updated {formatTimeAgo(pipelineStatus.lastRun)}</span>
+                  </>
+                ) : pipelineStatus.status === "error" ? (
+                  <>
+                    <AlertCircle className="h-3 w-3 text-red-500" />
+                    <span>Error {formatTimeAgo(pipelineStatus.lastRun)}</span>
+                  </>
+                ) : (
+                  <>
+                    <Clock className="h-3 w-3" />
+                    <span>Last run {formatTimeAgo(pipelineStatus.lastRun)}</span>
+                  </>
+                )}
+              </span>
+            )}
+          </div>
         </div>
-        <Button 
-          variant="outline" 
+        <Button
+          variant="outline"
           size="sm"
           onClick={() => refreshMutation.mutate()}
           disabled={isRefreshing}
@@ -196,8 +276,8 @@ export function Dashboard({ activeSports }: DashboardProps) {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {filteredOpportunities.slice(0, 6).map(opp => (
-              <OpportunityCard 
-                key={opp.id} 
+              <OpportunityCard
+                key={opp.id}
                 opportunity={opp}
                 game={(opp as any).game}
                 onClick={() => navigate(`/opportunities?gameId=${opp.gameId}`)}
@@ -236,8 +316,8 @@ export function Dashboard({ activeSports }: DashboardProps) {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {filteredGames.slice(0, 8).map(game => (
-              <GameCard 
-                key={game.id} 
+              <GameCard
+                key={game.id}
                 game={game}
                 odds={game.latestOdds}
                 hasOpportunity={(game.opportunityCount ?? 0) > 0}

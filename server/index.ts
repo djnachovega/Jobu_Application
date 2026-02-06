@@ -2,6 +2,8 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { storage } from "./storage";
+import { runFullPipeline } from "./services/pipeline";
 
 const app = express();
 const httpServer = createServer(app);
@@ -93,6 +95,41 @@ app.use((req, res, next) => {
     },
     () => {
       log(`serving on port ${port}`);
+
+      // Auto-refresh scheduler: checks user settings and runs pipeline on interval
+      let autoRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+      async function scheduleNextRefresh() {
+        try {
+          const autoRefresh = await storage.getSetting("autoRefresh");
+          const interval = await storage.getSetting("refreshInterval");
+
+          if (autoRefresh?.value === "true") {
+            const minutes = parseInt(interval?.value || "15", 10);
+            const ms = Math.max(5, minutes) * 60 * 1000;
+
+            autoRefreshTimer = setTimeout(async () => {
+              log(`Auto-refresh triggered (every ${minutes} min)`, "scheduler");
+              try {
+                await storage.upsertSetting("pipeline_status", "running");
+                await runFullPipeline();
+              } catch (err) {
+                log(`Auto-refresh error: ${err instanceof Error ? err.message : "Unknown"}`, "scheduler");
+              }
+              scheduleNextRefresh();
+            }, ms);
+          } else {
+            // Check again in 2 minutes if auto-refresh gets enabled
+            autoRefreshTimer = setTimeout(scheduleNextRefresh, 2 * 60 * 1000);
+          }
+        } catch {
+          // DB not ready yet, retry in 30s
+          autoRefreshTimer = setTimeout(scheduleNextRefresh, 30 * 1000);
+        }
+      }
+
+      // Start the scheduler after a short delay to let the DB initialize
+      setTimeout(scheduleNextRefresh, 10 * 1000);
     },
   );
 })();
